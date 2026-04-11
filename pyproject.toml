@@ -22,3 +22,9 @@ pocketmidi = "pocketmidi.cli:main"
 dev = [
     "pytest>=7.0",
 ]
+
+[tool.hatch.build]
+include = [
+    "pocketmidi/**/*.py",
+    "pocketmidi/profiles/*.json",
+]

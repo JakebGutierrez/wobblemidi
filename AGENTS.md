@@ -33,7 +33,7 @@ All tests must pass before moving to the next module.
 | 2 | `pocketmidi/midi_utils.py` | done |
 | 3 | `scripts/build_profiles.py` | done |
 | 4 | `pocketmidi/humanise.py` | done |
-| 5 | `pocketmidi/cli.py` | next |
+| 5 | `pocketmidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
 
 Build one module at a time. Use plan mode for each new module.
@@ -101,6 +101,23 @@ Non-obvious implementation decisions:
 - **JSON key format:** `"genre|beat_type|instrument_group"` for exact buckets;
   `"global|instrument_group"` for pooled. Values are `[[offset_ms, vel_delta], ...]`.
 - **File/parse errors** are silently skipped with a counter; the script continues.
+
+## Implementation notes — cli.py
+
+### cli.py
+Entry point: `pocketmidi <input.mid> <output.mid>`
+
+Non-obvious implementation decisions:
+- **Profile resolution:** Genre maps to `pocketmidi/profiles/{genre}.json` via
+  `importlib.resources.files("pocketmidi.profiles").joinpath(...)` + `as_file()`.
+  `as_file()` is required (not `str()`) to guarantee a real filesystem path in all
+  install layouts (editable, wheel, zip-imported).
+- **`--section` flag:** User-facing name for `beat_type` — maps directly to the
+  `beat_type` parameter of `humanise()`.
+- **`--intensity` validation:** Uses `click.FloatRange(0.0, 1.0)` — Click rejects
+  out-of-range values before `humanise()` is called.
+- **Packaging:** `[tool.hatch.build] include` covers both wheel and sdist so
+  `pocketmidi/profiles/*.json` ships in all distribution formats.
 
 ## Implementation details — pending modules
 
