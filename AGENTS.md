@@ -1,9 +1,9 @@
 # pocketmidi — Claude Code context
 
-## Code review style
-When asked to review code, output only blocking issues — incorrect logic,
-edge cases that would corrupt output, or broken contracts between modules.
-Ignore style, formatting, and minor suggestions unless explicitly asked.
+## Review style
+When asked to review code or a plan, output only blocking issues — incorrect 
+logic, edge cases that would corrupt output, or broken contracts between 
+modules. Ignore style, formatting, and minor suggestions unless explicitly asked.
 
 ## What this is
 CLI tool that humanises programmed drum MIDI using real drummer timing/velocity
@@ -51,6 +51,10 @@ variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
 `pocketmidi/midi_utils.py`.
 
 **Grid:** Straight 16th-note grid only. No swing/triplet in v1.
+
+**MIDI file type:** Type 0 and type 1 only. `humanise.py` builds a single song-level
+tempo map and applies it across all tracks. Type 2 (independent per-track timing) is
+not supported — GMD files are type 0/1.
 
 **Genre filter:** Rock only in v1. Filter: `df[df["style"].str.startswith("rock")]`.
 Jazz/funk profiles are explicitly out of scope (swing feel is misrepresented under
