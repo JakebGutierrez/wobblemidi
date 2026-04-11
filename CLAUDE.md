@@ -47,6 +47,10 @@ variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
 
 **Grid:** Straight 16th-note grid only. No swing/triplet in v1.
 
+**MIDI file type:** Type 0 and type 1 only. `humanise.py` builds a single song-level
+tempo map and applies it across all tracks. Type 2 (independent per-track timing) is
+not supported — GMD files are type 0/1.
+
 **Genre filter:** Rock only in v1. Filter: `df[df["style"].str.startswith("rock")]`.
 Jazz/funk profiles are explicitly out of scope (swing feel is misrepresented under
 a straight 16th grid).
