@@ -26,8 +26,8 @@ All tests must pass before moving to the next module.
 |---|--------|--------|
 | 1 | Scaffold (pyproject.toml, dirs) | done |
 | 2 | `pocketmidi/midi_utils.py` | done |
-| 3 | `scripts/build_profiles.py` | next |
-| 4 | `pocketmidi/humanise.py` | pending |
+| 3 | `scripts/build_profiles.py` | done |
+| 4 | `pocketmidi/humanise.py` | next |
 | 5 | `pocketmidi/cli.py` | stub only |
 | 6 | `tests/test_humanise.py` | pending |
 
@@ -74,14 +74,26 @@ profile build. Hi-hats and cymbals are exempt.
 in v1. The v2 upgrade replaces this with `scipy.stats.gaussian_kde` — the tuple
 pair storage format is designed to make this a drop-in replacement.
 
-## Implementation details — pending modules
+## Implementation notes — completed modules
 
 ### build_profiles.py
-- Reads `info.csv` from the unzipped GMD directory; key columns: `midi_filename`, `style`, `beat_type`
-- Filter rock: `df[df["style"].str.startswith("rock")]`
-- `MIN_SAMPLES = 30` — buckets below this threshold are not written to the profile; the runtime fallback handles them
-- `VELOCITY_FLOOR = 20` — drop hits below this for kick and snare only during ingest (ghost note / accidental trigger suppression); hi-hats and cymbals are exempt
-- Takes path to unzipped `groove-v1.0.0/` as CLI argument
+Run: `python scripts/build_profiles.py <path/to/groove-v1.0.0>`
+Output: `pocketmidi/profiles/rock.json`
+
+Non-obvious implementation decisions:
+- **Offset computation:** `offset_ticks_to_ms` (scalar tempo) is NOT used. Instead,
+  `ticks_to_ms_with_map` is called for both legs of the offset delta so that any tempo
+  change falling between `grid_tick` and `abs_tick` is handled correctly.
+- **Tick accumulation:** `abs_tick` resets to 0 per track, not per channel — MIDI delta
+  times are track-local.
+- **Global buckets:** In addition to `rock|{beat_type}|{instrument_group}` keys, the
+  script also writes `global|{instrument_group}` keys (all beat_types pooled) to support
+  fallback level 3. Median velocity is computed independently per bucket.
+- **JSON key format:** `"genre|beat_type|instrument_group"` for exact buckets;
+  `"global|instrument_group"` for pooled. Values are `[[offset_ms, vel_delta], ...]`.
+- **File/parse errors** are silently skipped with a counter; the script continues.
+
+## Implementation details — pending modules
 
 ### humanise.py
 - Pre-compute marginal arrays **at profile load time**, not per-hit:
