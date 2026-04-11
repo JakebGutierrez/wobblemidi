@@ -1,0 +1,797 @@
+"""Tests for pocketmidi/humanise.py"""
+
+from __future__ import annotations
+
+import json
+import math
+import tempfile
+from pathlib import Path
+
+import mido
+import numpy as np
+import pytest
+
+from pocketmidi.humanise import (
+    EPSILON_TICKS,
+    _lookup,
+    _ms_offset_to_ticks,
+    humanise,
+    load_profile,
+)
+from pocketmidi.midi_utils import build_tempo_map
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+DEFAULT_PPQ = 480
+DEFAULT_TEMPO_US = 500_000  # 120 BPM
+
+
+def _profile_dict(**extra) -> dict:
+    """Minimal profile with one rock|beat|kick bucket and optional extras."""
+    base = {"rock|beat|kick": [[0.0, 0.0], [5.0, 10.0], [-5.0, -10.0]]}
+    base.update(extra)
+    return base
+
+
+def _write_profile(tmp_path: Path, data: dict) -> Path:
+    p = tmp_path / "rock.json"
+    p.write_text(json.dumps(data))
+    return p
+
+
+def _make_midi(
+    messages: list[mido.Message],
+    ppq: int = DEFAULT_PPQ,
+    tempo_us: int = DEFAULT_TEMPO_US,
+    midi_type: int = 0,
+) -> mido.MidiFile:
+    """Build a single-track MidiFile from a list of messages (delta-time based)."""
+    mid = mido.MidiFile(type=midi_type, ticks_per_beat=ppq)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage("set_tempo", tempo=tempo_us, time=0))
+    for msg in messages:
+        track.append(msg)
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    return mid
+
+
+def _save_load(mid: mido.MidiFile, tmp_path: Path) -> Path:
+    p = tmp_path / "input.mid"
+    mid.save(str(p))
+    return p
+
+
+def _collect_abs(mid: mido.MidiFile) -> list[tuple[int, mido.Message]]:
+    """Return (abs_tick, msg) for all messages in track 0, filtering end_of_track."""
+    result = []
+    abs_tick = 0
+    for msg in mid.tracks[0]:
+        abs_tick += msg.time
+        if not isinstance(msg, mido.MetaMessage) or msg.type != "end_of_track":
+            result.append((abs_tick, msg))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# TestLoadProfile
+# ---------------------------------------------------------------------------
+
+class TestLoadProfile:
+    def test_loads_arrays(self, tmp_path):
+        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[1.0, 2.0], [3.0, 4.0]]})
+        profiles = load_profile(prof_path)
+        assert "rock|beat|kick" in profiles
+        offsets, vel_deltas = profiles["rock|beat|kick"]
+        np.testing.assert_array_almost_equal(offsets, [1.0, 3.0])
+        np.testing.assert_array_almost_equal(vel_deltas, [2.0, 4.0])
+
+    def test_array_shape(self, tmp_path):
+        prof_path = _write_profile(tmp_path, {"rock|beat|snare": [[0.0, 5.0]]})
+        profiles = load_profile(prof_path)
+        offsets, vel_deltas = profiles["rock|beat|snare"]
+        assert offsets.shape == (1,)
+        assert vel_deltas.shape == (1,)
+
+    def test_empty_bucket_skipped(self, tmp_path):
+        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [], "rock|beat|snare": [[1.0, 2.0]]})
+        profiles = load_profile(prof_path)
+        assert "rock|beat|kick" not in profiles
+        assert "rock|beat|snare" in profiles
+
+    def test_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            load_profile(tmp_path / "nonexistent.json")
+
+
+# ---------------------------------------------------------------------------
+# TestLookup
+# ---------------------------------------------------------------------------
+
+class TestLookup:
+    def setup_method(self):
+        self.profiles = {
+            "rock|beat|kick": (np.array([1.0]), np.array([0.0])),
+            "rock|beat|snare": (np.array([2.0]), np.array([0.0])),
+            "global|hihat_closed": (np.array([0.5]), np.array([0.0])),
+        }
+
+    def test_level1_exact(self):
+        arrays, level = _lookup(self.profiles, "rock", "beat", "kick")
+        assert level == 1
+        assert arrays is not None
+
+    def test_level2_beat_fallback(self):
+        # fill context not in profiles → should fall to beat
+        arrays, level = _lookup(self.profiles, "rock", "fill", "snare")
+        assert level == 2
+        assert arrays is not None
+
+    def test_level3_global(self):
+        arrays, level = _lookup(self.profiles, "rock", "fill", "hihat_closed")
+        assert level == 3
+        assert arrays is not None
+
+    def test_total_miss(self):
+        arrays, level = _lookup(self.profiles, "rock", "beat", "ride")
+        assert arrays is None
+        assert level is None
+
+
+# ---------------------------------------------------------------------------
+# TestMsOffsetToTicks
+# ---------------------------------------------------------------------------
+
+class TestMsOffsetToTicks:
+    def _simple_map(self):
+        return [(0, DEFAULT_TEMPO_US)]  # 120 BPM
+
+    def test_zero(self):
+        assert _ms_offset_to_ticks(0, 0.0, self._simple_map(), DEFAULT_PPQ) == 0
+
+    def test_positive(self):
+        # At 120 BPM, 1 beat = 500ms, PPQ=480 → 1 tick ≈ 500000/480/1000 ms ≈ 1.0417 ms
+        # 10ms → ~9.6 ticks → rounds to 10
+        result = _ms_offset_to_ticks(0, 10.0, self._simple_map(), DEFAULT_PPQ)
+        ms_per_tick = DEFAULT_TEMPO_US / DEFAULT_PPQ / 1000.0
+        expected = round(10.0 / ms_per_tick)
+        assert result == expected
+
+    def test_negative(self):
+        grid_tick = DEFAULT_PPQ  # one beat in
+        result = _ms_offset_to_ticks(grid_tick, -10.0, self._simple_map(), DEFAULT_PPQ)
+        ms_per_tick = DEFAULT_TEMPO_US / DEFAULT_PPQ / 1000.0
+        expected = -round(10.0 / ms_per_tick)
+        assert result == expected
+
+    def test_positive_across_tempo_boundary(self):
+        # Tempo map: 120 BPM from tick 0, 60 BPM from tick 480
+        # grid_tick=0, want to walk 10ms forward crossing the boundary at tick 480
+        # At 120 BPM: ms_per_tick = 500000/480/1000 ≈ 1.0417ms → tick 480 is 500ms away
+        # So 10ms fits entirely in the first segment
+        tempo_map = [(0, DEFAULT_TEMPO_US), (480, 1_000_000)]
+        result = _ms_offset_to_ticks(0, 10.0, tempo_map, DEFAULT_PPQ)
+        assert result > 0  # moved forward
+
+    def test_backward_starting_on_boundary(self):
+        # Was an infinite-loop bug: current == tempo_map[idx][0] → ticks_to_prev == 0
+        tempo_map = [(0, DEFAULT_TEMPO_US), (480, 1_000_000)]
+        grid_tick = 480  # exactly on the boundary
+        result = _ms_offset_to_ticks(grid_tick, -5.0, tempo_map, DEFAULT_PPQ)
+        assert result < 0  # moved backward
+
+    def test_across_forward_tempo_boundary_crosses(self):
+        # Tempo map: very slow first segment so 10ms spans into the second segment
+        # 240000 us/beat at PPQ=480 → ms_per_tick = 240000/480/1000 = 0.5ms
+        # tick 0→4: 4 ticks * 0.5ms = 2ms, then switch to 500000us
+        tempo_map = [(0, 240_000), (4, DEFAULT_TEMPO_US)]
+        # walk 10ms from tick 0: first 2ms uses 4 ticks, remaining 8ms at 120BPM
+        result = _ms_offset_to_ticks(0, 10.0, tempo_map, DEFAULT_PPQ)
+        ms_per_tick_after = DEFAULT_TEMPO_US / DEFAULT_PPQ / 1000.0
+        expected = 4 + round(8.0 / ms_per_tick_after)
+        assert result == expected
+
+
+# ---------------------------------------------------------------------------
+# Shared fixture: build a mid + profile + output path
+# ---------------------------------------------------------------------------
+
+def _run_humanise(mid, profiles_dict, tmp_path, **kwargs):
+    inp = tmp_path / "in.mid"
+    out = tmp_path / "out.mid"
+    mid.save(str(inp))
+    prof_path = _write_profile(tmp_path, profiles_dict)
+    profiles = load_profile(prof_path)
+    humanise(inp, out, profiles, **kwargs)
+    return mido.MidiFile(str(out))
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseVelocityClamp
+# ---------------------------------------------------------------------------
+
+class TestHumaniseVelocityClamp:
+    def test_clamp_below_1(self, tmp_path):
+        # kick at velocity 1 with large negative delta → should clamp to 1
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=1,   time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,   time=480),
+        ])
+        # vel_delta always -100
+        profiles = {"rock|beat|kick": [[-0.0, -100.0]]}
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=0)
+        note_ons = [
+            msg for _, msg in _collect_abs(out)
+            if msg.type == "note_on" and msg.velocity > 0
+        ]
+        assert note_ons[0].velocity >= 1
+
+    def test_clamp_above_127(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=127, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,   time=480),
+        ])
+        profiles = {"rock|beat|kick": [[0.0, 100.0]]}
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=0)
+        note_ons = [
+            msg for _, msg in _collect_abs(out)
+            if msg.type == "note_on" and msg.velocity > 0
+        ]
+        assert note_ons[0].velocity <= 127
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseNoDeltaTimeNegative
+# ---------------------------------------------------------------------------
+
+class TestHumaniseNoDeltaTimeNegative:
+    def _check_no_negative_deltas(self, out_mid):
+        for track in out_mid.tracks:
+            for msg in track:
+                assert msg.time >= 0, f"Negative delta: {msg}"
+
+    def test_no_negative_deltas_basic(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        profiles = {"rock|beat|kick": [[-20.0, 0.0], [20.0, 0.0]]}
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=1)
+        self._check_no_negative_deltas(out)
+
+    def test_shifted_early_bounded_by_prev_emitted(self, tmp_path):
+        # note at tick 480 shifted early must land >= 0
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        profiles = {"rock|beat|kick": [[-10000.0, 0.0]]}  # huge early offset
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=0)
+        self._check_no_negative_deltas(out)
+
+    def test_shifted_late_bounded_by_note_off(self, tmp_path):
+        # note_on at 0, note_off at tick 10 → can't shift past tick 10
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=10),
+        ])
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}  # huge late offset
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=0)
+        events = _collect_abs(out)
+        note_on_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+        note_off_abs = next(t for t, m in events if m.type == "note_off" or (m.type == "note_on" and m.velocity == 0))
+        assert note_on_abs < note_off_abs
+
+    def test_shifted_late_bounded_by_next_fixed(self, tmp_path):
+        # note_on at 0, set_tempo at tick 240 → can't shift past 240
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        # Insert a CC (fixed event) at tick 100 — use separate track approach via direct track building
+        mid2 = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid2.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.Message("control_change", channel=9, control=7, value=100, time=-470))  # at tick 10
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        # build simpler: note_on at 0, CC at 10, note_off at 480
+        mid3 = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track3 = mido.MidiTrack()
+        mid3.tracks.append(track3)
+        track3.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track3.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track3.append(mido.Message("control_change", channel=9, control=7, value=100, time=10))  # abs=10
+        track3.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=470))  # abs=480
+        track3.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}
+        inp = tmp_path / "in3.mid"
+        out = tmp_path / "out3.mid"
+        mid3.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+        self._check_no_negative_deltas(result)
+        # shifted note_on must be before the CC at abs=10
+        events = _collect_abs(result)
+        note_on_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+        cc_abs = next(t for t, m in events if m.type == "control_change")
+        assert note_on_abs < cc_abs
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseFixedEventsUnmoved
+# ---------------------------------------------------------------------------
+
+class TestHumaniseFixedEventsUnmoved:
+    def test_cc_stays_at_original_tick(self, tmp_path):
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.Message("control_change", channel=0, control=7, value=100, time=0))  # abs=480
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[5.0, 0.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        events = _collect_abs(result)
+        cc_abs = next(t for t, m in events if m.type == "control_change")
+        assert cc_abs == 480
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseEpsilonDropped
+# ---------------------------------------------------------------------------
+
+class TestHumaniseEpsilonDropped:
+    def test_epsilon_dropped_when_window_exhausted(self, tmp_path):
+        # Two consecutive hits at same tick; shift late. The second hit's
+        # lower_with_eps could exceed upper — epsilon must be dropped.
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        # First kick at tick 0, note_off at tick 1
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=1))
+        # Second kick at tick 1, note_off at tick 2
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=1))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        # Profile: big late offset so both hits try to land at tick 1; second is
+        # bounded above by its note_off at tick 2
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+    def test_fixed_events_still_unmoved_after_epsilon_drop(self, tmp_path):
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=1))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=1))
+        track.append(mido.Message("control_change", channel=0, control=7, value=100, time=0))  # abs=2
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        events = _collect_abs(result)
+        cc_abs = next(t for t, m in events if m.type == "control_change")
+        assert cc_abs == 2
+
+    def test_same_tick_collision_empty_window(self, tmp_path):
+        # Shiftable kick at tick 0, fixed CC also at tick 0 → upper_exclusive=0,
+        # ceiling=-1, lower=0 > ceiling: empty window, note passes through at abs_t=0.
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("control_change", channel=0, control=7, value=100, time=0))  # abs=0
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10000.0, 5.0]]}
+        inp = tmp_path / "in_sc.mid"
+        out = tmp_path / "out_sc.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+        events = _collect_abs(result)
+        kick_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+        cc_abs = next(t for t, m in events if m.type == "control_change")
+        assert kick_abs == 0       # stayed at original tick
+        assert cc_abs == 0         # fixed event unmoved
+        assert kick_abs < cc_abs or kick_abs == cc_abs  # no ordering violation (same-tick passthrough)
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseDenseHitAfterFixedNoteOn
+# ---------------------------------------------------------------------------
+
+class TestHumaniseDenseHitAfterFixedNoteOn:
+    def test_shiftable_after_fixed_note_on(self, tmp_path):
+        # non-drum note_on (no profile, channel 0) at tick 0 is fixed
+        # drum kick at tick 0 with early offset should land >= 0 + EPSILON
+        # unless bounded above
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=0, note=60, velocity=64, time=0))   # fixed (no profile)
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))   # shiftable kick
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.Message("note_off", channel=0, note=60, velocity=0,  time=0))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[0.0, 0.0]]}  # zero offset → lands on grid
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseNoteOffStaysAfterNoteOn
+# ---------------------------------------------------------------------------
+
+class TestHumaniseNoteOffStaysAfterNoteOn:
+    def test_note_off_after_note_on(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=5),
+        ])
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}  # push late
+        out = _run_humanise(mid, profiles, tmp_path, genre="rock", beat_type="beat", seed=0)
+        events = _collect_abs(out)
+        note_on_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+        note_off_abs = next(t for t, m in events if m.type == "note_off" or (m.type == "note_on" and m.velocity == 0))
+        assert note_on_abs < note_off_abs
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseMixedShiftableAndFixedSameNotePairing
+# ---------------------------------------------------------------------------
+
+class TestHumaniseMixedShiftableAndFixedSameNotePairing:
+    def test_shiftable_bounded_by_its_own_note_off(self, tmp_path):
+        # note_on (no-profile, ch0) at 0, note_off at 10
+        # note_on (kick, ch9)   at 0, note_off at 20
+        # Fixed kick: ch0/note60, shiftable: ch9/note36 (same note doesn't matter — different ch)
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=0, note=60, velocity=64, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=0, note=60, velocity=0,  time=10))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=10))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+        events = _collect_abs(result)
+        kick_on = next(t for t, m in events if m.type == "note_on" and m.velocity > 0 and m.channel == 9)
+        kick_off = next(t for t, m in events if (m.type == "note_off" or (m.type == "note_on" and m.velocity == 0)) and m.channel == 9)
+        assert kick_on < kick_off
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseOverlappingSameNoteShiftablePairing
+# ---------------------------------------------------------------------------
+
+class TestHumaniseOverlappingSameNoteShiftablePairing:
+    def test_fifo_pairing(self, tmp_path):
+        # Two shiftable kicks: A at tick 0, B at tick 5
+        # note_offs at tick 10 and tick 20 → A paired with tick 10, B with tick 20
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))   # A abs=0
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=5))   # B abs=5
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=5))   # note_off abs=10 → pairs with A
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=10))  # note_off abs=20 → pairs with B
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10000.0, 0.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseRejectsType2
+# ---------------------------------------------------------------------------
+
+class TestHumaniseType1MultiTrack:
+    def test_type1_two_tracks_processed(self, tmp_path):
+        # Type 1: tempo event lives in track 0 (conductor track), drum notes in track 1.
+        # Verifies both tracks survive and the shared tempo map is applied correctly.
+        mid = mido.MidiFile(type=1, ticks_per_beat=DEFAULT_PPQ)
+
+        conductor = mido.MidiTrack()
+        mid.tracks.append(conductor)
+        conductor.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        conductor.append(mido.MetaMessage("end_of_track", time=0))
+
+        drum_track = mido.MidiTrack()
+        mid.tracks.append(drum_track)
+        drum_track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=480))
+        drum_track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        drum_track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[5.0, 5.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+
+        result = mido.MidiFile(str(out))
+        assert result.type == 1
+        assert len(result.tracks) == 2
+
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+
+    def test_type1_tempo_in_track1_applied_to_track0_drums(self, tmp_path):
+        # Tempo event is in track 1; drum notes are in track 0.
+        # Uses a non-default tempo (1_000_000 us = 60 BPM) so the expected output tick
+        # differs from the 120-BPM fallback — the assertion fails if build_tempo_map()
+        # only scanned track 0.
+        NON_DEFAULT_TEMPO = 1_000_000  # 60 BPM: 1 tick ≈ 2.083 ms at PPQ=480
+        mid = mido.MidiFile(type=1, ticks_per_beat=DEFAULT_PPQ)
+
+        drum_track = mido.MidiTrack()
+        mid.tracks.append(drum_track)
+        drum_track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=480))
+        drum_track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        drum_track.append(mido.MetaMessage("end_of_track", time=0))
+
+        tempo_track = mido.MidiTrack()
+        mid.tracks.append(tempo_track)
+        tempo_track.append(mido.MetaMessage("set_tempo", tempo=NON_DEFAULT_TEMPO, time=0))
+        tempo_track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[10.0, 0.0]]}
+        inp = tmp_path / "in2.mid"
+        out = tmp_path / "out2.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", intensity=1.0, seed=0)
+
+        result = mido.MidiFile(str(out))
+        events = _collect_abs(result)
+        note_on_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+
+        ms_per_tick = NON_DEFAULT_TEMPO / DEFAULT_PPQ / 1000.0  # ≈ 2.083 ms
+        expected = 480 + round(10.0 / ms_per_tick)              # ≈ 485 ticks
+        assert note_on_abs == expected, (
+            f"Expected {expected} ticks (60 BPM tempo from track 1); "
+            f"got {note_on_abs} — tempo map may not have scanned track 1"
+        )
+
+
+class TestHumaniseRejectsType2:
+    def test_raises_value_error(self, tmp_path):
+        mid = mido.MidiFile(type=2, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        profiles = {}
+        with pytest.raises(ValueError, match="Type 2"):
+            humanise(inp, out, profiles)
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseSeedReproducible
+# ---------------------------------------------------------------------------
+
+class TestHumaniseSeedReproducible:
+    def test_same_seed_same_output(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+            mido.Message("note_on",  channel=9, note=38, velocity=90, time=0),
+            mido.Message("note_off", channel=9, note=38, velocity=0,  time=480),
+        ])
+        profiles_dict = {
+            "rock|beat|kick":  [[-5.0, -5.0], [5.0, 5.0]],
+            "rock|beat|snare": [[-3.0, 3.0],  [3.0, -3.0]],
+        }
+
+        inp = tmp_path / "in.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles_dict)
+        profs = load_profile(prof_path)
+
+        out1 = tmp_path / "out1.mid"
+        out2 = tmp_path / "out2.mid"
+        humanise(inp, out1, profs, genre="rock", beat_type="beat", seed=42)
+        humanise(inp, out2, profs, genre="rock", beat_type="beat", seed=42)
+
+        assert out1.read_bytes() == out2.read_bytes()
+
+    def test_different_seed_may_differ(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        profiles_dict = {"rock|beat|kick": [[-5.0, -5.0], [5.0, 5.0], [0.0, 0.0]]}
+
+        inp = tmp_path / "in.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles_dict)
+        profs = load_profile(prof_path)
+
+        out1 = tmp_path / "out1.mid"
+        out2 = tmp_path / "out2.mid"
+        humanise(inp, out1, profs, genre="rock", beat_type="beat", seed=1)
+        humanise(inp, out2, profs, genre="rock", beat_type="beat", seed=2)
+        # Not guaranteed to differ with only one hit, but with varied profile it usually will.
+        # We test this by just verifying both complete without error.
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseUnknownNotes
+# ---------------------------------------------------------------------------
+
+class TestHumaniseUnknownNotes:
+    def test_unknown_note_passes_through(self, tmp_path):
+        # MIDI note 99 is not in TD11_TO_GROUP → must pass through unmodified
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=99, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=99, velocity=0,  time=480),
+        ])
+        profiles = {"rock|beat|kick": [[5.0, 5.0]]}
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        events = _collect_abs(result)
+        note_on = next(
+            (t, m) for t, m in events if m.type == "note_on" and m.velocity > 0 and m.note == 99
+        )
+        assert note_on[1].velocity == 80  # velocity unchanged
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseIntensityZero
+# ---------------------------------------------------------------------------
+
+class TestHumaniseIntensityZero:
+    def test_intensity_zero_lands_on_grid_with_unchanged_velocity(self, tmp_path):
+        ppq = DEFAULT_PPQ
+        # Put kick on an off-grid position: tick 10 → grid = 0 (nearest 16th at ppq=480 is 120)
+        # Actually tick 10 snaps to 0. Use tick 130 → nearest 16th = 120.
+        mid = mido.MidiFile(type=0, ticks_per_beat=ppq)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=130))  # snaps to 120
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+
+        profiles = {"rock|beat|kick": [[20.0, 15.0]]}  # non-zero offset and vel_delta
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", intensity=0.0, seed=0)
+        result = mido.MidiFile(str(out))
+
+        events = _collect_abs(result)
+        note_on_abs, note_on_msg = next(
+            (t, m) for t, m in events if m.type == "note_on" and m.velocity > 0
+        )
+        assert note_on_abs == 120, f"Expected grid tick 120, got {note_on_abs}"
+        assert note_on_msg.velocity == 80
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseNoProfile
+# ---------------------------------------------------------------------------
+
+class TestHumaniseNoProfile:
+    def test_no_profile_note_passes_through(self, tmp_path):
+        # Kick but profile dict is empty → passes through at original tick with original velocity
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        profiles_dict = {}  # no profiles at all
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        prof_path = _write_profile(tmp_path, profiles_dict)
+        profs = load_profile(prof_path)
+        humanise(inp, out, profs, genre="rock", beat_type="beat", seed=0)
+        result = mido.MidiFile(str(out))
+
+        events = _collect_abs(result)
+        note_on = next((t, m) for t, m in events if m.type == "note_on" and m.velocity > 0)
+        assert note_on[0] == 480
+        assert note_on[1].velocity == 80

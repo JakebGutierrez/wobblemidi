@@ -27,9 +27,9 @@ All tests must pass before moving to the next module.
 | 1 | Scaffold (pyproject.toml, dirs) | done |
 | 2 | `pocketmidi/midi_utils.py` | done |
 | 3 | `scripts/build_profiles.py` | done |
-| 4 | `pocketmidi/humanise.py` | next |
-| 5 | `pocketmidi/cli.py` | stub only |
-| 6 | `tests/test_humanise.py` | pending |
+| 4 | `pocketmidi/humanise.py` | done |
+| 5 | `pocketmidi/cli.py` | next |
+| 6 | `tests/test_humanise.py` | done |
 
 Build one module at a time. Use plan mode for each new module.
 
