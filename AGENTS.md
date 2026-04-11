@@ -37,6 +37,7 @@ Build one module at a time. Use plan mode for each new module.
 - Plan mode before any multi-file or new-module work
 - Read existing code before editing
 - Commit after each working module
+- Never add Co-Authored-By lines to commit messages
 
 ## Design decisions — do not change without discussion
 
