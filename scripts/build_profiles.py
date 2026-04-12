@@ -32,7 +32,19 @@ from pocketmidi.midi_utils import (
 MIN_SAMPLES = 30
 VELOCITY_FLOOR = 20
 KICK_SNARE_GROUPS = {"kick", "snare"}
+STRATIFIED_GROUPS = {"kick", "snare"}  # only these get velocity tier buckets
+KDE_BW_METHOD = "scott"  # change to "silverman" or a float if hi-hat sounds smeared
 OUTPUT_FILE = Path(__file__).parent.parent / "pocketmidi" / "profiles" / "rock.json"
+
+
+def _velocity_tier(velocity: float, thresholds: tuple[float, float]) -> str:
+    low, high = thresholds
+    if velocity < low:
+        return "soft"
+    elif velocity < high:
+        return "medium"
+    else:
+        return "hard"
 
 
 def _build_pairs(hits: list[dict]) -> list[list[float]]:
@@ -112,24 +124,61 @@ def main(gmd_dir: Path) -> None:
     click.echo(f"Total raw hits collected: {len(raw_hits)}  (files skipped: {skipped_files})")
 
     # ------------------------------------------------------------------
-    # 3a. Per-style buckets: rock|{beat_type}|{instrument_group}
+    # 3. Compute velocity tertile thresholds for kick and snare
+    #    (from post-filter raw_hits so boundaries match the retained data)
     # ------------------------------------------------------------------
-    style_buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    all_by_instrument: dict[str, list[float]] = defaultdict(list)
     for h in raw_hits:
-        style_buckets[(h["beat_type"], h["instrument_group"])].append(h)
+        if h["instrument_group"] in STRATIFIED_GROUPS:
+            all_by_instrument[h["instrument_group"]].append(h["velocity"])
 
-    # 3b. Global buckets: global|{instrument_group}
+    velocity_thresholds: dict[str, tuple[float, float]] = {}
+    for instr, vels in all_by_instrument.items():
+        low, high = np.percentile(vels, [33, 66])
+        velocity_thresholds[instr] = (float(low), float(high))
+        click.echo(f"  {instr} velocity tertiles: soft<{low:.1f}, medium<{high:.1f}, hard>={high:.1f}")
+
+    # ------------------------------------------------------------------
+    # 4a. Per-style buckets
+    #     - stratified (kick/snare only): rock|{beat_type}|{instrument}|{tier}
+    #     - unstratified (all instruments): rock|{beat_type}|{instrument}
+    # ------------------------------------------------------------------
+    # Group hits by (beat_type, instrument_group)
+    style_buckets: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    # Group stratified hits by (beat_type, instrument_group, tier)
+    tier_buckets: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
+
+    for h in raw_hits:
+        key = (h["beat_type"], h["instrument_group"])
+        style_buckets[key].append(h)
+
+        if h["instrument_group"] in STRATIFIED_GROUPS:
+            thresholds = velocity_thresholds[h["instrument_group"]]
+            tier = _velocity_tier(h["velocity"], thresholds)
+            tier_buckets[(h["beat_type"], h["instrument_group"], tier)].append(h)
+
+    # 4b. Global buckets: global|{instrument_group}
     global_buckets: dict[str, list[dict]] = defaultdict(list)
     for h in raw_hits:
         global_buckets[h["instrument_group"]].append(h)
 
     # ------------------------------------------------------------------
-    # 4. Build profiles, enforcing MIN_SAMPLES threshold
+    # 5. Build profiles, enforcing MIN_SAMPLES threshold
     # ------------------------------------------------------------------
     profiles: dict[str, list[list[float]]] = {}
     written = 0
     skipped_buckets = 0
 
+    # Stratified buckets (kick and snare only)
+    for (beat_type, instrument_group, tier), hits in tier_buckets.items():
+        if len(hits) < MIN_SAMPLES:
+            skipped_buckets += 1
+            continue
+        key = f"rock|{beat_type}|{instrument_group}|{tier}"
+        profiles[key] = _build_pairs(hits)
+        written += 1
+
+    # Unstratified per-style buckets (all instruments, also serves as tier-drop fallback)
     for (beat_type, instrument_group), hits in style_buckets.items():
         if len(hits) < MIN_SAMPLES:
             skipped_buckets += 1
@@ -138,6 +187,7 @@ def main(gmd_dir: Path) -> None:
         profiles[key] = _build_pairs(hits)
         written += 1
 
+    # Global buckets (unstratified, fallback level 4 for kick/snare, level 3 for others)
     for instrument_group, hits in global_buckets.items():
         if len(hits) < MIN_SAMPLES:
             skipped_buckets += 1
@@ -147,11 +197,22 @@ def main(gmd_dir: Path) -> None:
         written += 1
 
     # ------------------------------------------------------------------
-    # 5. Write JSON
+    # 6. Write JSON (bucket data + _meta)
     # ------------------------------------------------------------------
+    output: dict = {
+        "_meta": {
+            "velocity_thresholds": {
+                instr: list(thresholds)
+                for instr, thresholds in velocity_thresholds.items()
+            },
+            "kde_bw_method": KDE_BW_METHOD,
+        }
+    }
+    output.update(profiles)
+
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("w") as f:
-        json.dump(profiles, f)
+        json.dump(output, f)
 
     click.echo(
         f"Buckets written: {written}  skipped (< {MIN_SAMPLES} samples): {skipped_buckets}"

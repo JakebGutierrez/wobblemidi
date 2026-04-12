@@ -3,48 +3,119 @@
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import json
 import math
 from collections import defaultdict, deque
 from pathlib import Path
+from typing import Any
 
 import mido
 import numpy as np
+from scipy.stats import gaussian_kde
 
 from pocketmidi.midi_utils import TD11_TO_GROUP, build_tempo_map, quantise_to_grid
 
 EPSILON_TICKS = 1
 
-ProfileArrays = tuple[np.ndarray, np.ndarray]  # (offsets_ms, vel_deltas)
+
+@dataclasses.dataclass(frozen=True)
+class BucketProfile:
+    offsets: np.ndarray     # (N,) raw offset_ms values
+    vel_deltas: np.ndarray  # (N,) raw vel_delta values
+    kde: Any                # gaussian_kde fitted on (offset_ms, vel_delta) pairs, or None
 
 
-def load_profile(path: str | Path) -> dict[str, ProfileArrays]:
+@dataclasses.dataclass(frozen=True)
+class LoadedProfile:
+    buckets: dict[str, BucketProfile]
+    velocity_thresholds: dict[str, tuple[float, float]]
+
+
+def load_profile(path: str | Path) -> LoadedProfile:
     with open(path) as f:
         raw = json.load(f)
-    profiles: dict[str, ProfileArrays] = {}
+
+    meta = raw.pop("_meta", {})
+    vel_thresholds: dict[str, tuple[float, float]] = {
+        k: (float(v[0]), float(v[1]))
+        for k, v in meta.get("velocity_thresholds", {}).items()
+    }
+    bw_method = meta.get("kde_bw_method", "scott")
+    # Pre-validate bw_method so any bad value from _meta raises immediately rather
+    # than being silently swallowed by the per-bucket degenerate-data guard below.
+    # Valid values: the two scipy-accepted strings, or a numeric scalar bandwidth.
+    if isinstance(bw_method, str):
+        if bw_method not in {"scott", "silverman"}:
+            raise ValueError(
+                f"Invalid kde_bw_method {bw_method!r} in profile _meta; "
+                "valid strings are 'scott' and 'silverman' (or use a numeric scalar)."
+            )
+    elif not isinstance(bw_method, (int, float)):
+        raise ValueError(
+            f"Invalid kde_bw_method {bw_method!r} in profile _meta; "
+            "must be 'scott', 'silverman', or a numeric scalar."
+        )
+
+    buckets: dict[str, BucketProfile] = {}
     for key, pairs in raw.items():
         if not pairs:
             continue
-        # Assumes well-formed pairs [[offset_ms, vel_delta], ...].
-        # Add shape/type validation here when --profile (custom user paths) is implemented.
-        arr = np.array(pairs)            # shape (N, 2)
-        profiles[key] = (arr[:, 0], arr[:, 1])
-    return profiles
+        arr = np.array(pairs, dtype=float)   # shape (N, 2)
+        offsets = arr[:, 0]
+        vel_deltas = arr[:, 1]
+        try:
+            kde = gaussian_kde(arr.T, bw_method=bw_method)  # arr.T shape (2, N)
+        except (ValueError, np.linalg.LinAlgError):
+            # Degenerate bucket (too few samples or singular covariance). bw_method
+            # was already validated above, so any ValueError here is a data issue.
+            # Keep the bucket alive with kde=None; uniform-index fallback handles it.
+            kde = None
+        buckets[key] = BucketProfile(offsets=offsets, vel_deltas=vel_deltas, kde=kde)
+
+    return LoadedProfile(buckets=buckets, velocity_thresholds=vel_thresholds)
+
+
+def _velocity_tier(velocity: int, thresholds: tuple[float, float]) -> str:
+    low, high = thresholds
+    if velocity < low:
+        return "soft"
+    elif velocity < high:
+        return "medium"
+    else:
+        return "hard"
 
 
 def _lookup(
-    profiles: dict[str, ProfileArrays],
+    profile: LoadedProfile,
     genre: str,
     beat_type: str,
     instrument_group: str,
-) -> tuple[ProfileArrays | None, int | None]:
-    for level, key in enumerate([
-        f"{genre}|{beat_type}|{instrument_group}",
-        f"{genre}|beat|{instrument_group}",
-        f"global|{instrument_group}",
-    ], start=1):
-        if key in profiles:
-            return profiles[key], level
+    velocity: int,
+) -> tuple[BucketProfile | None, int | None]:
+    """Return the best-matching BucketProfile and its fallback level (1-based)."""
+    thresholds = profile.velocity_thresholds.get(instrument_group)
+    tier = _velocity_tier(velocity, thresholds) if thresholds else None
+
+    if tier:
+        # 4-level chain for stratified instruments (kick, snare)
+        candidates = [
+            (1, f"{genre}|{beat_type}|{instrument_group}|{tier}"),
+            (2, f"{genre}|{beat_type}|{instrument_group}"),
+            (3, f"{genre}|beat|{instrument_group}"),
+            (4, f"global|{instrument_group}"),
+        ]
+    else:
+        # 3-level chain for hi-hat, cymbals, etc. — unchanged from v1
+        candidates = [
+            (1, f"{genre}|{beat_type}|{instrument_group}"),
+            (2, f"{genre}|beat|{instrument_group}"),
+            (3, f"global|{instrument_group}"),
+        ]
+
+    for level, key in candidates:
+        if key in profile.buckets:
+            return profile.buckets[key], level
     return None, None
 
 
@@ -102,10 +173,25 @@ def _ms_offset_to_ticks(
     return current - grid_tick
 
 
+def _sample_bucket(bucket: BucketProfile) -> tuple[float, float]:
+    """Draw one (offset_ms, vel_delta) sample from a bucket.
+
+    Primary path: joint 2D KDE sample.
+    Fallback (kde is None — degenerate bucket): uniform draw from raw pairs.
+    Both paths advance numpy RNG state by one draw so seed behaviour is consistent.
+    """
+    if bucket.kde is not None:
+        sample = bucket.kde.resample(1)   # shape (2, 1); uses numpy RNG state
+        return float(sample[0, 0]), float(sample[1, 0])
+    else:
+        idx = np.random.randint(len(bucket.offsets))
+        return float(bucket.offsets[idx]), float(bucket.vel_deltas[idx])
+
+
 def humanise(
     input_path: str | Path,
     output_path: str | Path,
-    profiles: dict[str, ProfileArrays],
+    profiles: LoadedProfile,
     genre: str = "rock",
     beat_type: str = "beat",
     intensity: float = 1.0,
@@ -144,7 +230,7 @@ def humanise(
                 and msg.velocity > 0
                 and hasattr(msg, "note")
                 and msg.note in TD11_TO_GROUP
-                and _lookup(profiles, genre, beat_type, TD11_TO_GROUP[msg.note])[0] is not None
+                and _lookup(profiles, genre, beat_type, TD11_TO_GROUP[msg.note], msg.velocity)[0] is not None
             )
             will_shift.append(shiftable)
 
@@ -177,14 +263,11 @@ def humanise(
         for idx, (abs_t, msg) in enumerate(abs_messages):
             if will_shift[idx]:
                 group = TD11_TO_GROUP[msg.note]
-                arrays, level = _lookup(profiles, genre, beat_type, group)
-                offsets, vel_deltas = arrays
-                i = np.random.randint(len(offsets))
-                j = np.random.randint(len(vel_deltas))
+                bucket, level = _lookup(profiles, genre, beat_type, group, msg.velocity)
+                offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
                 if velocity_only:
-                    vel_delta = vel_deltas[j] * intensity
-                    new_vel = max(1, min(127, round(msg.velocity + vel_delta)))
+                    new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
                     out_abs.append((abs_t, msg.copy(velocity=new_vel)))
                     prev_note_on_abs = abs_t
                     prev_emitted_abs = abs_t
@@ -194,13 +277,12 @@ def humanise(
 
                 grid_tick = quantise_to_grid(abs_t, ppq)
                 candidate = grid_tick + _ms_offset_to_ticks(
-                    grid_tick, offsets[i] * intensity, tempo_map, ppq
+                    grid_tick, offset_ms_raw * intensity, tempo_map, ppq
                 )
                 if timing_only:
                     new_vel = msg.velocity
                 else:
-                    vel_delta = vel_deltas[j] * intensity
-                    new_vel = max(1, min(127, round(msg.velocity + vel_delta)))
+                    new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
 
                 lower = max(prev_emitted_abs, prev_note_on_abs + EPSILON_TICKS)
                 upper_exclusive = min(

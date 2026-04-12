@@ -12,6 +12,7 @@ import pytest
 from click.testing import CliRunner
 
 from pocketmidi.cli import main
+from pocketmidi.humanise import BucketProfile, LoadedProfile
 
 # ---------------------------------------------------------------------------
 # Helpers (minimal copies of test_humanise.py utilities)
@@ -48,9 +49,16 @@ def _minimal_midi(tmp_path: Path) -> Path:
     return p
 
 
-_FAKE_PROFILES = {
-    "rock|beat|kick": (np.array([0.0, 5.0, -5.0]), np.array([0.0, 10.0, -10.0])),
-}
+_FAKE_PROFILES = LoadedProfile(
+    buckets={
+        "rock|beat|kick": BucketProfile(
+            offsets=np.array([0.0, 5.0, -5.0]),
+            vel_deltas=np.array([0.0, 10.0, -10.0]),
+            kde=None,  # degenerate-safe; tests don't inspect KDE output
+        ),
+    },
+    velocity_thresholds={},
+)
 
 _SENTINEL = Path("/nonexistent/rock.json")
 

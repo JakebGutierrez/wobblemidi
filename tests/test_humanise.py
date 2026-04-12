@@ -13,8 +13,11 @@ import pytest
 
 from pocketmidi.humanise import (
     EPSILON_TICKS,
+    BucketProfile,
+    LoadedProfile,
     _lookup,
     _ms_offset_to_ticks,
+    _velocity_tier,
     humanise,
     load_profile,
 )
@@ -82,24 +85,70 @@ def _collect_abs(mid: mido.MidiFile) -> list[tuple[int, mido.Message]]:
 class TestLoadProfile:
     def test_loads_arrays(self, tmp_path):
         prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[1.0, 2.0], [3.0, 4.0]]})
-        profiles = load_profile(prof_path)
-        assert "rock|beat|kick" in profiles
-        offsets, vel_deltas = profiles["rock|beat|kick"]
-        np.testing.assert_array_almost_equal(offsets, [1.0, 3.0])
-        np.testing.assert_array_almost_equal(vel_deltas, [2.0, 4.0])
+        profile = load_profile(prof_path)
+        assert "rock|beat|kick" in profile.buckets
+        bucket = profile.buckets["rock|beat|kick"]
+        np.testing.assert_array_almost_equal(bucket.offsets, [1.0, 3.0])
+        np.testing.assert_array_almost_equal(bucket.vel_deltas, [2.0, 4.0])
 
     def test_array_shape(self, tmp_path):
         prof_path = _write_profile(tmp_path, {"rock|beat|snare": [[0.0, 5.0]]})
-        profiles = load_profile(prof_path)
-        offsets, vel_deltas = profiles["rock|beat|snare"]
-        assert offsets.shape == (1,)
-        assert vel_deltas.shape == (1,)
+        profile = load_profile(prof_path)
+        bucket = profile.buckets["rock|beat|snare"]
+        assert bucket.offsets.shape == (1,)
+        assert bucket.vel_deltas.shape == (1,)
 
     def test_empty_bucket_skipped(self, tmp_path):
         prof_path = _write_profile(tmp_path, {"rock|beat|kick": [], "rock|beat|snare": [[1.0, 2.0]]})
-        profiles = load_profile(prof_path)
-        assert "rock|beat|kick" not in profiles
-        assert "rock|beat|snare" in profiles
+        profile = load_profile(prof_path)
+        assert "rock|beat|kick" not in profile.buckets
+        assert "rock|beat|snare" in profile.buckets
+
+    def test_kde_fitted(self, tmp_path):
+        # 3 non-identical points → KDE fits successfully; kde.d must be 2 (2D KDE).
+        from scipy.stats import gaussian_kde
+        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[0.0, 0.0], [5.0, 10.0], [-5.0, -10.0]]})
+        profile = load_profile(prof_path)
+        bucket = profile.buckets["rock|beat|kick"]
+        assert isinstance(bucket.kde, gaussian_kde)
+        assert bucket.kde.d == 2
+
+    def test_kde_none_for_degenerate_bucket(self, tmp_path):
+        # 1 sample → scipy raises ValueError → kde falls back to None.
+        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[3.0, 5.0]]})
+        profile = load_profile(prof_path)
+        bucket = profile.buckets["rock|beat|kick"]
+        assert bucket.kde is None
+
+    def test_meta_velocity_thresholds(self, tmp_path):
+        data = {
+            "_meta": {"velocity_thresholds": {"snare": [40.0, 85.0]}, "kde_bw_method": "scott"},
+            "rock|beat|snare": [[0.0, 0.0], [5.0, 5.0], [-5.0, -5.0]],
+        }
+        prof_path = _write_profile(tmp_path, data)
+        profile = load_profile(prof_path)
+        assert "snare" in profile.velocity_thresholds
+        low, high = profile.velocity_thresholds["snare"]
+        assert low == pytest.approx(40.0)
+        assert high == pytest.approx(85.0)
+        # _meta must not appear as a bucket
+        assert "_meta" not in profile.buckets
+
+    @pytest.mark.parametrize("bad_bw", [
+        "not_a_real_method",   # invalid string
+        {"key": "val"},        # object — would reach gaussian_kde and be swallowed
+        [1, 2],                # array — same problem
+    ])
+    def test_invalid_bw_method_raises(self, tmp_path, bad_bw):
+        # Any invalid kde_bw_method in _meta must raise ValueError immediately,
+        # not silently set kde=None for every bucket (broken _meta contract).
+        data = {
+            "_meta": {"kde_bw_method": bad_bw},
+            "rock|beat|kick": [[0.0, 0.0], [5.0, 10.0], [-5.0, -10.0]],
+        }
+        prof_path = _write_profile(tmp_path, data)
+        with pytest.raises(ValueError, match="kde_bw_method"):
+            load_profile(prof_path)
 
     def test_missing_file_raises(self, tmp_path):
         with pytest.raises(FileNotFoundError):
@@ -110,34 +159,107 @@ class TestLoadProfile:
 # TestLookup
 # ---------------------------------------------------------------------------
 
+def _make_bucket(*pairs) -> BucketProfile:
+    """Build a minimal BucketProfile from (offset_ms, vel_delta) pairs (kde=None)."""
+    arr = np.array(pairs, dtype=float)
+    return BucketProfile(offsets=arr[:, 0], vel_deltas=arr[:, 1], kde=None)
+
+
 class TestLookup:
     def setup_method(self):
-        self.profiles = {
-            "rock|beat|kick": (np.array([1.0]), np.array([0.0])),
-            "rock|beat|snare": (np.array([2.0]), np.array([0.0])),
-            "global|hihat_closed": (np.array([0.5]), np.array([0.0])),
-        }
+        self.profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick":       _make_bucket((1.0, 0.0)),
+                "rock|beat|snare":      _make_bucket((2.0, 0.0)),
+                "global|hihat_closed":  _make_bucket((0.5, 0.0)),
+            },
+            velocity_thresholds={},
+        )
 
     def test_level1_exact(self):
-        arrays, level = _lookup(self.profiles, "rock", "beat", "kick")
+        bucket, level = _lookup(self.profile, "rock", "beat", "kick", 80)
         assert level == 1
-        assert arrays is not None
+        assert bucket is not None
 
     def test_level2_beat_fallback(self):
-        # fill context not in profiles → should fall to beat
-        arrays, level = _lookup(self.profiles, "rock", "fill", "snare")
+        # fill context not in buckets → should fall to beat (unstratified)
+        bucket, level = _lookup(self.profile, "rock", "fill", "snare", 80)
         assert level == 2
-        assert arrays is not None
+        assert bucket is not None
 
     def test_level3_global(self):
-        arrays, level = _lookup(self.profiles, "rock", "fill", "hihat_closed")
+        # hi-hat: 3-level chain; fill not present → beat not present → global
+        bucket, level = _lookup(self.profile, "rock", "fill", "hihat_closed", 80)
         assert level == 3
-        assert arrays is not None
+        assert bucket is not None
 
     def test_total_miss(self):
-        arrays, level = _lookup(self.profiles, "rock", "beat", "ride")
-        assert arrays is None
+        bucket, level = _lookup(self.profile, "rock", "beat", "ride", 80)
+        assert bucket is None
         assert level is None
+
+    def test_tier_routing_soft(self):
+        # Snare with velocity thresholds: soft tier key present → level 1.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|snare|soft":   _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|snare":        _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"snare": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "snare", 30)  # 30 < 40 → soft
+        assert level == 1
+        assert bucket is not None
+
+    def test_tier_routing_medium(self):
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|snare|medium": _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|snare":        _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"snare": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "snare", 60)  # 40 <= 60 < 80 → medium
+        assert level == 1
+        assert bucket is not None
+
+    def test_tier_routing_hard(self):
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|snare|hard":   _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|snare":        _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"snare": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "snare", 100)  # 100 >= 80 → hard
+        assert level == 1
+        assert bucket is not None
+
+    def test_tier_drop_fallback(self):
+        # Exact tier key absent → falls back to unstratified at level 2.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|snare": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+            },
+            velocity_thresholds={"snare": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "snare", 30)  # soft key absent
+        assert level == 2
+        assert bucket is not None
+
+    def test_hihat_no_tier_routing(self):
+        # Hi-hat has no velocity thresholds → goes straight to the 3-level chain.
+        # Velocity value must not affect key selection.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|hihat_closed": _make_bucket((0.5, 0.0), (1.0, 0.5), (-0.5, -0.5)),
+            },
+            velocity_thresholds={"snare": (40.0, 80.0)},  # snare thresholds present, hihat absent
+        )
+        bucket_soft, level_soft = _lookup(profile, "rock", "beat", "hihat_closed", 20)
+        bucket_hard, level_hard = _lookup(profile, "rock", "beat", "hihat_closed", 120)
+        assert level_soft == 1
+        assert level_hard == 1  # velocity has no effect; same bucket
 
 
 # ---------------------------------------------------------------------------
@@ -656,7 +778,7 @@ class TestHumaniseRejectsType2:
         inp = tmp_path / "in.mid"
         out = tmp_path / "out.mid"
         mid.save(str(inp))
-        profiles = {}
+        profiles = LoadedProfile(buckets={}, velocity_thresholds={})
         with pytest.raises(ValueError, match="Type 2"):
             humanise(inp, out, profiles)
 
