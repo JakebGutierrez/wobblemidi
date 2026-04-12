@@ -56,6 +56,81 @@ def _build_pairs(hits: list[dict]) -> list[list[float]]:
     return [[h["offset_ms"], h["velocity"] - median_vel] for h in hits]
 
 
+def _build_pairs_with_clip(hits: list[dict]) -> list[list[float]] | None:
+    """Clip offset outliers, enforce MIN_SAMPLES, then build [[offset_ms, vel_delta], ...].
+
+    Drops hits with offset_ms outside the 2nd–98th percentile to remove
+    accidental timing errors from GMD recordings before KDE fitting.
+    Returns None if fewer than MIN_SAMPLES hits remain after clipping so the
+    caller can skip the bucket and let the fallback chain handle it.
+    """
+    offsets = np.array([h["offset_ms"] for h in hits])
+    lo, hi = np.percentile(offsets, [2, 98])
+    retained = [h for h in hits if lo <= h["offset_ms"] <= hi]
+    if len(retained) < MIN_SAMPLES:
+        return None
+    return _build_pairs(retained)
+
+
+def _build_profiles(
+    grid_tier_buckets: dict,
+    grid_style_buckets: dict,
+    tier_buckets: dict,
+    style_buckets: dict,
+    global_buckets: dict,
+) -> tuple[dict[str, list[list[float]]], int, int]:
+    """Build the profiles dict from pre-grouped bucket dicts.
+
+    Returns (profiles, written_count, skipped_count).
+    Every bucket family routes through _build_pairs_with_clip.
+    """
+    profiles: dict[str, list[list[float]]] = {}
+    written = 0
+    skipped = 0
+
+    for (beat_type, instrument_group, tier, gp), hits in grid_tier_buckets.items():
+        pairs = _build_pairs_with_clip(hits)
+        if pairs is None:
+            skipped += 1
+            continue
+        profiles[f"rock|{beat_type}|{instrument_group}|{tier}|{gp}"] = pairs
+        written += 1
+
+    for (beat_type, instrument_group, gp), hits in grid_style_buckets.items():
+        pairs = _build_pairs_with_clip(hits)
+        if pairs is None:
+            skipped += 1
+            continue
+        profiles[f"rock|{beat_type}|{instrument_group}|{gp}"] = pairs
+        written += 1
+
+    for (beat_type, instrument_group, tier), hits in tier_buckets.items():
+        pairs = _build_pairs_with_clip(hits)
+        if pairs is None:
+            skipped += 1
+            continue
+        profiles[f"rock|{beat_type}|{instrument_group}|{tier}"] = pairs
+        written += 1
+
+    for (beat_type, instrument_group), hits in style_buckets.items():
+        pairs = _build_pairs_with_clip(hits)
+        if pairs is None:
+            skipped += 1
+            continue
+        profiles[f"rock|{beat_type}|{instrument_group}"] = pairs
+        written += 1
+
+    for instrument_group, hits in global_buckets.items():
+        pairs = _build_pairs_with_clip(hits)
+        if pairs is None:
+            skipped += 1
+            continue
+        profiles[f"global|{instrument_group}"] = pairs
+        written += 1
+
+    return profiles, written, skipped
+
+
 @click.command()
 @click.argument("gmd_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
 def main(gmd_dir: Path) -> None:
@@ -183,56 +258,11 @@ def main(gmd_dir: Path) -> None:
         global_buckets[h["instrument_group"]].append(h)
 
     # ------------------------------------------------------------------
-    # 5. Build profiles, enforcing MIN_SAMPLES threshold
+    # 5. Build profiles, clipping offset outliers and enforcing MIN_SAMPLES
     # ------------------------------------------------------------------
-    profiles: dict[str, list[list[float]]] = {}
-    written = 0
-    skipped_buckets = 0
-
-    # Grid-position-stratified, velocity-tiered (kick/snare): rock|beat_type|instr|tier|grid_pos
-    for (beat_type, instrument_group, tier, gp), hits in grid_tier_buckets.items():
-        if len(hits) < MIN_SAMPLES:
-            skipped_buckets += 1
-            continue
-        key = f"rock|{beat_type}|{instrument_group}|{tier}|{gp}"
-        profiles[key] = _build_pairs(hits)
-        written += 1
-
-    # Grid-position-aware, unstratified: rock|beat_type|instr|grid_pos
-    for (beat_type, instrument_group, gp), hits in grid_style_buckets.items():
-        if len(hits) < MIN_SAMPLES:
-            skipped_buckets += 1
-            continue
-        key = f"rock|{beat_type}|{instrument_group}|{gp}"
-        profiles[key] = _build_pairs(hits)
-        written += 1
-
-    # Stratified buckets (kick and snare only — fallback for grid-pos levels)
-    for (beat_type, instrument_group, tier), hits in tier_buckets.items():
-        if len(hits) < MIN_SAMPLES:
-            skipped_buckets += 1
-            continue
-        key = f"rock|{beat_type}|{instrument_group}|{tier}"
-        profiles[key] = _build_pairs(hits)
-        written += 1
-
-    # Unstratified per-style buckets (all instruments, also serves as tier-drop fallback)
-    for (beat_type, instrument_group), hits in style_buckets.items():
-        if len(hits) < MIN_SAMPLES:
-            skipped_buckets += 1
-            continue
-        key = f"rock|{beat_type}|{instrument_group}"
-        profiles[key] = _build_pairs(hits)
-        written += 1
-
-    # Global buckets (unstratified, fallback level 4 for kick/snare, level 3 for others)
-    for instrument_group, hits in global_buckets.items():
-        if len(hits) < MIN_SAMPLES:
-            skipped_buckets += 1
-            continue
-        key = f"global|{instrument_group}"
-        profiles[key] = _build_pairs(hits)
-        written += 1
+    profiles, written, skipped_buckets = _build_profiles(
+        grid_tier_buckets, grid_style_buckets, tier_buckets, style_buckets, global_buckets
+    )
 
     # ------------------------------------------------------------------
     # 6. Write JSON (bucket data + _meta)
