@@ -14,7 +14,13 @@ import mido
 import numpy as np
 from scipy.stats import gaussian_kde
 
-from pocketmidi.midi_utils import TD11_TO_GROUP, build_tempo_map, quantise_to_grid
+from pocketmidi.midi_utils import (
+    TD11_TO_GROUP,
+    build_tempo_map,
+    grid_position_in_bar,
+    is_four_four,
+    quantise_to_grid,
+)
 
 EPSILON_TICKS = 1
 
@@ -92,25 +98,45 @@ def _lookup(
     beat_type: str,
     instrument_group: str,
     velocity: int,
+    grid_pos: int | None = None,
 ) -> tuple[BucketProfile | None, int | None]:
-    """Return the best-matching BucketProfile and its fallback level (1-based)."""
+    """Return the best-matching BucketProfile and its fallback level (1-based).
+
+    When grid_pos is provided, stratified instruments try tier+grid_pos then
+    unstratified+grid_pos before dropping to non-grid keys (offset=2).
+    Unstratified instruments try instrument+grid_pos before non-grid keys (offset=1).
+    When grid_pos is None, offset=0 and level numbering is identical to today.
+    """
     thresholds = profile.velocity_thresholds.get(instrument_group)
     tier = _velocity_tier(velocity, thresholds) if thresholds else None
 
     if tier:
-        # 4-level chain for stratified instruments (kick, snare)
-        candidates = [
-            (1, f"{genre}|{beat_type}|{instrument_group}|{tier}"),
-            (2, f"{genre}|{beat_type}|{instrument_group}"),
-            (3, f"{genre}|beat|{instrument_group}"),
-            (4, f"global|{instrument_group}"),
+        # Up to 6-level chain for stratified instruments (kick, snare).
+        # With grid_pos: try tier+grid_pos, then unstratified+grid_pos (keeps position
+        # signal alive past a tier miss), then tier-only, then non-grid fallbacks.
+        candidates: list[tuple[int, str]] = []
+        offset = 0
+        if grid_pos is not None:
+            candidates.append((1, f"{genre}|{beat_type}|{instrument_group}|{tier}|{grid_pos}"))
+            candidates.append((2, f"{genre}|{beat_type}|{instrument_group}|{grid_pos}"))
+            offset = 2
+        candidates += [
+            (1 + offset, f"{genre}|{beat_type}|{instrument_group}|{tier}"),
+            (2 + offset, f"{genre}|{beat_type}|{instrument_group}"),
+            (3 + offset, f"{genre}|beat|{instrument_group}"),
+            (4 + offset, f"global|{instrument_group}"),
         ]
     else:
-        # 3-level chain for hi-hat, cymbals, etc. — unchanged from v1
-        candidates = [
-            (1, f"{genre}|{beat_type}|{instrument_group}"),
-            (2, f"{genre}|beat|{instrument_group}"),
-            (3, f"global|{instrument_group}"),
+        # Up to 4-level chain for hi-hat, cymbals, etc.
+        candidates = []
+        offset = 0
+        if grid_pos is not None:
+            candidates.append((1, f"{genre}|{beat_type}|{instrument_group}|{grid_pos}"))
+            offset = 1
+        candidates += [
+            (1 + offset, f"{genre}|{beat_type}|{instrument_group}"),
+            (2 + offset, f"{genre}|beat|{instrument_group}"),
+            (3 + offset, f"global|{instrument_group}"),
         ]
 
     for level, key in candidates:
@@ -207,6 +233,19 @@ def humanise(
     mid = mido.MidiFile(str(input_path))
     if mid.type == 2:
         raise ValueError("Type 2 MIDI files are not supported")
+    # Only enforce 4/4 when the profile contains grid-position-aware buckets.
+    # A grid-pos key ends with a numeric segment (e.g. "rock|beat|kick|hard|3").
+    # Profiles without such keys fall back to the pre-grid-pos chain and work on
+    # any time signature, so rejecting them here would be a regression.
+    profile_has_grid_pos = any(
+        key.split("|")[-1].isdigit() for key in profiles.buckets
+    )
+    if profile_has_grid_pos and not is_four_four(mid):
+        raise ValueError(
+            "Only 4/4 time is supported (the loaded profile contains grid-position "
+            "buckets that assume a 4/4 bar length). "
+            "Found a non-4/4 time_signature message in the MIDI file."
+        )
     out_mid = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     tempo_map = build_tempo_map(mid)
     ppq = mid.ticks_per_beat
@@ -230,8 +269,15 @@ def humanise(
                 and msg.velocity > 0
                 and hasattr(msg, "note")
                 and msg.note in TD11_TO_GROUP
-                and _lookup(profiles, genre, beat_type, TD11_TO_GROUP[msg.note], msg.velocity)[0] is not None
             )
+            if shiftable:
+                gp = grid_position_in_bar(quantise_to_grid(abs_t, ppq), ppq)
+                shiftable = (
+                    _lookup(
+                        profiles, genre, beat_type, TD11_TO_GROUP[msg.note],
+                        msg.velocity, grid_pos=gp,
+                    )[0] is not None
+                )
             will_shift.append(shiftable)
 
         # next_fixed[i]: abs_tick of first event at j >= i where will_shift[j] is False
@@ -263,7 +309,9 @@ def humanise(
         for idx, (abs_t, msg) in enumerate(abs_messages):
             if will_shift[idx]:
                 group = TD11_TO_GROUP[msg.note]
-                bucket, level = _lookup(profiles, genre, beat_type, group, msg.velocity)
+                grid_tick = quantise_to_grid(abs_t, ppq)
+                grid_pos = grid_position_in_bar(grid_tick, ppq)
+                bucket, level = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
                 offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
                 if velocity_only:
@@ -275,7 +323,6 @@ def humanise(
                         print(f"  note {msg.note} ({group}): level {level}")
                     continue
 
-                grid_tick = quantise_to_grid(abs_t, ppq)
                 candidate = grid_tick + _ms_offset_to_ticks(
                     grid_tick, offset_ms_raw * intensity, tempo_map, ppq
                 )

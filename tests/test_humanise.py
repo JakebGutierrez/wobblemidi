@@ -986,3 +986,176 @@ class TestHumaniseFlags:
         profs = load_profile(prof_path)
         with pytest.raises(ValueError, match="mutually exclusive"):
             humanise(inp, out, profs, timing_only=True, velocity_only=True)
+
+
+# ---------------------------------------------------------------------------
+# TestLookupGridPos
+# ---------------------------------------------------------------------------
+
+class TestLookupGridPos:
+    def test_stratified_exact_with_grid_pos(self):
+        # Profile has the exact grid-pos + tier key → level 1.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick|hard|3": _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|kick|hard":   _make_bucket((0.0, 0.0)),
+                "rock|beat|kick":        _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"kick": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=3)
+        assert level == 1
+        assert bucket is not None
+
+    def test_stratified_tier_grid_pos_miss_falls_to_unstratified_grid_pos(self):
+        # tier+grid_pos miss → unstratified+grid_pos present → level 2.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick|5":  _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|kick|hard": _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"kick": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
+        assert level == 2
+        assert bucket is not None
+
+    def test_stratified_both_grid_pos_miss_falls_to_tier(self):
+        # Both grid_pos keys absent → tier-only key at level 3.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick|hard": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+            },
+            velocity_thresholds={"kick": (40.0, 80.0)},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
+        assert level == 3
+        assert bucket is not None
+
+    def test_unstratified_exact_with_grid_pos(self):
+        # Hi-hat with grid_pos bucket present → level 1.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|hihat_closed|7": _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|hihat_closed":   _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=7)
+        assert level == 1
+        assert bucket is not None
+
+    def test_unstratified_grid_pos_miss_falls_to_style(self):
+        # grid_pos=2 absent → falls back to style bucket at level 2.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|hihat_closed|7": _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|hihat_closed":   _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+            },
+            velocity_thresholds={},
+        )
+        bucket, level = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=2)
+        assert level == 2
+        assert bucket is not None
+
+    def test_grid_pos_none_preserves_existing_levels(self):
+        # grid_pos=None: existing level numbering must be unchanged.
+        # Stratified exact tier → level 1, tier-drop → level 2.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick|hard": _make_bucket((1.0, 0.0), (2.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|kick":      _make_bucket((0.0, 0.0)),
+            },
+            velocity_thresholds={"kick": (40.0, 80.0)},
+        )
+        _, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
+        assert level == 1  # rock|beat|kick|hard is level 1
+
+    def test_grid_pos_none_tier_drop_is_level2(self):
+        # Exact tier key absent, grid_pos=None → tier-drop at level 2.
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+            },
+            velocity_thresholds={"kick": (40.0, 80.0)},
+        )
+        _, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
+        assert level == 2
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseRejectsNonFourFour
+# ---------------------------------------------------------------------------
+
+class TestHumaniseRejectsNonFourFour:
+    def _midi_with_time_sig(self, numerator: int, denominator: int) -> mido.MidiFile:
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.MetaMessage(
+            "time_signature",
+            numerator=numerator,
+            denominator=denominator,
+            clocks_per_click=24,
+            notated_32nd_notes_per_beat=8,
+            time=0,
+        ))
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=0))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=480))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        return mid
+
+    def _grid_pos_profile(self) -> LoadedProfile:
+        """Profile that contains a grid-position bucket — triggers the 4/4 check."""
+        return LoadedProfile(
+            buckets={"rock|beat|kick|hard|3": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0))},
+            velocity_thresholds={},
+        )
+
+    def _plain_profile(self) -> LoadedProfile:
+        """Profile with no grid-position buckets — 4/4 check must not fire."""
+        return LoadedProfile(buckets={}, velocity_thresholds={})
+
+    def test_three_four_raises_with_grid_pos_profile(self, tmp_path):
+        # non-4/4 file + profile that has grid-pos buckets → ValueError
+        mid = self._midi_with_time_sig(3, 4)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        with pytest.raises(ValueError, match="4/4"):
+            humanise(inp, out, self._grid_pos_profile())
+
+    def test_six_eight_raises_with_grid_pos_profile(self, tmp_path):
+        mid = self._midi_with_time_sig(6, 8)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        with pytest.raises(ValueError, match="4/4"):
+            humanise(inp, out, self._grid_pos_profile())
+
+    def test_three_four_accepted_with_plain_profile(self, tmp_path):
+        # non-4/4 file + profile with NO grid-pos buckets → must not raise (regression guard)
+        mid = self._midi_with_time_sig(3, 4)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._plain_profile())  # must not raise
+
+    def test_explicit_four_four_accepted(self, tmp_path):
+        mid = self._midi_with_time_sig(4, 4)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._grid_pos_profile())  # must not raise
+
+    def test_no_time_sig_accepted(self, tmp_path):
+        # No time_signature event → MIDI default 4/4 → accepted even with grid-pos profile.
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._grid_pos_profile())  # must not raise

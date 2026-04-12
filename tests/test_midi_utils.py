@@ -1,14 +1,18 @@
 """Tests for pocketmidi.midi_utils."""
 
 import pytest
+import mido
+
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
+    build_tempo_map,
+    get_tempo_at_tick,
+    grid_position_in_bar,
+    is_four_four,
+    offset_ticks_to_ms,
+    quantise_to_grid,
     ticks_to_ms,
     ticks_to_ms_with_map,
-    quantise_to_grid,
-    offset_ticks_to_ms,
-    get_tempo_at_tick,
-    build_tempo_map,
 )
 
 
@@ -198,3 +202,93 @@ class TestTicksToMsWithMap:
     def test_invalid_ppq(self):
         with pytest.raises(ValueError):
             ticks_to_ms_with_map(0, 480, self.FLAT_MAP, 0)
+
+
+# ---------------------------------------------------------------------------
+# TestGridPositionInBar
+# ---------------------------------------------------------------------------
+
+class TestGridPositionInBar:
+    PPQ = 480  # sixteenth = 120 ticks, bar = 1920 ticks
+
+    def test_beat1_downbeat(self):
+        assert grid_position_in_bar(0, self.PPQ) == 0
+
+    def test_beat2_downbeat(self):
+        # beat 2 = 4 sixteenths in = tick 480
+        assert grid_position_in_bar(480, self.PPQ) == 4
+
+    def test_beat3_downbeat(self):
+        assert grid_position_in_bar(960, self.PPQ) == 8
+
+    def test_beat4_downbeat(self):
+        assert grid_position_in_bar(1440, self.PPQ) == 12
+
+    def test_last_sixteenth(self):
+        # position 15 = tick 1800 (15 * 120)
+        assert grid_position_in_bar(1800, self.PPQ) == 15
+
+    def test_wraps_at_bar_boundary(self):
+        # tick 1920 = start of bar 2 → position 0
+        assert grid_position_in_bar(1920, self.PPQ) == 0
+
+    def test_second_bar_beat2(self):
+        # bar 2, beat 2 = tick 1920 + 480 = 2400 → position 4
+        assert grid_position_in_bar(2400, self.PPQ) == 4
+
+    def test_non_standard_ppq(self):
+        ppq = 220  # sixteenth = 55 ticks, bar = 880 ticks
+        assert grid_position_in_bar(0, ppq) == 0
+        assert grid_position_in_bar(55, ppq) == 1
+        assert grid_position_in_bar(220, ppq) == 4
+
+    def test_non_divisible_ppq_wraps_correctly(self):
+        # ppq=222: sixteenth = 222 // 4 = 55 (truncates), ticks_per_bar = 16 * 55 = 880.
+        # Using ppq * 4 = 888 instead would make position 15 (tick 825) + one step
+        # land at tick 880 which gives (880 % 888) // 55 = 16 — out of range.
+        ppq = 222
+        sixteenth = 55  # 222 // 4
+        assert grid_position_in_bar(0, ppq) == 0
+        assert grid_position_in_bar(15 * sixteenth, ppq) == 15   # last slot
+        assert grid_position_in_bar(16 * sixteenth, ppq) == 0    # wraps to next bar
+
+
+# ---------------------------------------------------------------------------
+# TestIsFourFour
+# ---------------------------------------------------------------------------
+
+def _midi_with_time_sig(numerator: int, denominator: int) -> mido.MidiFile:
+    mid = mido.MidiFile(type=0, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage(
+        "time_signature",
+        numerator=numerator,
+        denominator=denominator,
+        clocks_per_click=24,
+        notated_32nd_notes_per_beat=8,
+        time=0,
+    ))
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    return mid
+
+
+class TestIsFourFour:
+    def test_no_time_sig_is_four_four(self):
+        mid = mido.MidiFile(type=0, ticks_per_beat=480)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        assert is_four_four(mid) is True
+
+    def test_explicit_four_four(self):
+        assert is_four_four(_midi_with_time_sig(4, 4)) is True
+
+    def test_three_four(self):
+        assert is_four_four(_midi_with_time_sig(3, 4)) is False
+
+    def test_six_eight(self):
+        assert is_four_four(_midi_with_time_sig(6, 8)) is False
+
+    def test_five_four(self):
+        assert is_four_four(_midi_with_time_sig(5, 4)) is False
