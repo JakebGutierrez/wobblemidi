@@ -30,6 +30,8 @@ All tests must pass before moving to the next module.
 | 4 | `pocketmidi/humanise.py` | done |
 | 5 | `pocketmidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
+| 7 | `--timing-only` / `--velocity-only` flags | done |
+| 8 | Velocity-stratified buckets + KDE sampling | pending |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -90,9 +92,7 @@ Ordered by musical impact:
    GMD rock|beat|snare has ~26,825 samples — enough to stratify even if soft hits are
    10% of that.
 
-2. **`--timing-only` / `--velocity-only` flags** — apply timing humanisation without
-   touching velocity, or vice versa. Useful when input already has good velocity
-   variation (e.g. finger-drummed then quantised).
+2. **`--timing-only` / `--velocity-only` flags** — done. See implementation notes below.
 
 3. **KDE sampling** — replace flat independent sampling with
    `scipy.stats.gaussian_kde`. Storage format already supports this as a drop-in.
@@ -127,6 +127,20 @@ Non-obvious implementation decisions:
 - **JSON key format:** `"genre|beat_type|instrument_group"` for exact buckets;
   `"global|instrument_group"` for pooled. Values are `[[offset_ms, vel_delta], ...]`.
 - **File/parse errors** are silently skipped with a counter; the script continues.
+
+## Implementation notes — --timing-only / --velocity-only
+
+- **`velocity_only` bypasses the timing path entirely** via `continue` after appending
+  `(abs_t, msg.copy(velocity=new_vel))`. Do NOT seed `candidate = abs_t` and let the
+  windowing run — the `prev_note_on_abs` lower bound would still bump same-tick notes
+  by `EPSILON_TICKS`, breaking the "position untouched" contract.
+- **Random draws** (`i`, `j`) always happen regardless of mode so RNG state stays
+  consistent when toggling flags with the same seed.
+- **Mutual exclusion** is enforced in both `humanise()` (raises `ValueError`) and
+  `cli.py` (exits 1 before profile load). CLI guard runs first so no file I/O happens.
+- **Profile validation** is intentionally deferred: `load_profile` assumes well-formed
+  `[[offset_ms, vel_delta], ...]` pairs. Add shape/type validation when `--profile`
+  (user-supplied JSON) is implemented.
 
 ## Implementation notes — cli.py
 
