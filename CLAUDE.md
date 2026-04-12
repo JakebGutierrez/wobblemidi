@@ -182,3 +182,44 @@ Non-obvious implementation decisions:
   out-of-range values before `humanise()` is called.
 - **Packaging:** `[tool.hatch.build] include` covers both wheel and sdist so
   `pocketmidi/profiles/*.json` ships in all distribution formats.
+
+## Implementation notes — module 9: grid position awareness
+
+Bucket key gains a 16th-note grid-position dimension (0–15 within a 4/4 bar).
+`grid_position_in_bar(grid_tick, ppq)` uses `16 * (ppq // 4)` for bar length —
+NOT `ppq * 4` — so the wrap is consistent with the truncated `quantise_to_grid`
+sixteenth. Using `ppq * 4` breaks for any PPQ not divisible by 4.
+
+Stratified fallback chain with grid_pos (6 levels):
+1. `rock|beat|kick|hard|3` — tier + grid_pos
+2. `rock|beat|kick|3` — unstratified + grid_pos (keeps position signal past tier miss)
+3. `rock|beat|kick|hard` — tier only
+4. `rock|beat|kick` — style only
+5. `rock|beat|kick` — drop fill context
+6. `global|kick`
+
+`grid_pos=None` → offset=0 → levels 1,2,3,4 unchanged (backward compat).
+
+4/4 gate in `humanise()` is conditional: only fires when the loaded profile
+contains grid-pos buckets (detected by `key.split("|")[-1].isdigit()`). Legacy
+profiles without grid-pos keys skip the check and work on any time signature.
+
+rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
+7 non-4/4 files skipped.
+
+## Next: outlier clipping (module 10)
+
+**Problem:** At intensity 0.3, some kick/snare hits land way off — sounds like a
+drummer struggling to keep time, not intentional feel. Root cause: KDE tails include
+genuine GMD performance mistakes (outlier timing values), not stylistic choices.
+
+**Fix:** Clip extreme offset_ms values during profile build before fitting KDE.
+Trim hits beyond the 2nd/98th percentile of offset_ms **per bucket** in
+`build_profiles.py`, inside `_build_pairs` or just before it. This removes accident
+samples from the distribution entirely rather than masking them at runtime.
+
+**Do NOT** cap at runtime in `humanise.py` — that treats the symptom. The profile
+should model intentional timing only.
+
+Rebuild rock.json after implementing. Test with `--timing-only --intensity 0.3`
+on finger-drummed quantized MIDI — weird outlier hits should be gone.
