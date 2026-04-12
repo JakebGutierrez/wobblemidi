@@ -161,3 +161,17 @@ Requires rebuilding `pocketmidi/profiles/rock.json`. Breaking change — batch t
   replace independent random draws with 2D joint `scipy.stats.gaussian_kde` fit at load time;
   classify hit velocity against `_meta` thresholds to pick tier
 - `pyproject.toml`: add `scipy` dependency
+
+**Velocity tier thresholds — use tertiles, not fixed values.** Split soft/medium/hard
+at the 33rd and 66th percentile of actual GMD velocities per instrument group. Compute
+per instrument (kick and snare have different typical velocity ranges). Write thresholds
+to `_meta` in the JSON.
+
+**KDE — fit at load time, not per hit.** Fit once in `load_profile`, store fitted KDE
+objects in the profile dict. Never refit inside the per-hit loop.
+
+**KDE bandwidth — check by ear after first rebuild.** Scott's rule is the default.
+Hi-hat timing can be bimodal (on-grid and behind-the-beat clusters) — Scott's rule
+may over-smooth this into one blob, making the hi-hat feel smeared rather than
+pocketed. Listen to a hi-hat pattern after rebuild and adjust bandwidth in
+`build_profiles.py` if needed. Not a CLI flag.

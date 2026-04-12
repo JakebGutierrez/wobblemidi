@@ -128,6 +128,30 @@ Non-obvious implementation decisions:
   `"global|instrument_group"` for pooled. Values are `[[offset_ms, vel_delta], ...]`.
 - **File/parse errors** are silently skipped with a counter; the script continues.
 
+## Implementation notes — module 8 (pending): velocity-stratified buckets + KDE sampling
+
+Requires rebuilding `pocketmidi/profiles/rock.json`. Batch items 1 + 3 together —
+both require a profile rebuild and changes to the bucket key structure.
+
+**Velocity tier thresholds — use tertiles, not fixed values.** Split soft/medium/hard
+at the 33rd and 66th percentile of actual GMD velocities per instrument group. This
+lets the data decide where the boundaries are rather than guessing. Compute per
+instrument (kick and snare have different typical velocity ranges). Write computed
+thresholds to a `_meta` key in the JSON so `humanise.py` reads them at load time.
+
+**KDE — fit at load time, not per hit.** Fitting a KDE is expensive; sampling from
+one is cheap. Fit once in `load_profile` when the JSON is read, store the fitted KDE
+objects in the profile dict. Never refit inside the per-hit loop.
+
+**KDE bandwidth — check by ear after first rebuild.** scipy's default (Scott's rule)
+is the right starting point. However, hi-hat timing in GMD can have two clusters —
+right on the grid and slightly behind — and Scott's rule may blur these into one,
+making the hi-hat feel smeared. After the first profile rebuild, listen to a hi-hat
+pattern and check that it has a sense of pocket rather than random scatter. If it
+sounds wrong, try Silverman's rule or a manually set bandwidth in `build_profiles.py`.
+This is a developer tuning step, not a user-facing flag — bandwidth has no meaningful
+musical label and should not be exposed as a CLI option.
+
 ## Implementation notes — --timing-only / --velocity-only
 
 - **`velocity_only` bypasses the timing path entirely** via `continue` after appending
