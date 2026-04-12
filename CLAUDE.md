@@ -49,6 +49,8 @@ variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
 
 **Grid:** Straight 16th-note grid only. No swing/triplet in v1.
 
+**Time signature:** Not read. Grid is always 16th notes derived from `ppq` (quarter notes). 3/4 works as-is. 6/8 requires an eighth-note grid — not yet implemented.
+
 **MIDI file type:** Type 0 and type 1 only. `humanise.py` builds a single song-level
 tempo map and applies it across all tracks. Type 2 (independent per-track timing) is
 not supported — GMD files are type 0/1.
@@ -105,6 +107,11 @@ Ordered by musical impact:
 5. **Custom profile source** — `--profile path/to/custom.json` flag so users can
    build profiles from their own MIDI packs (e.g. professional drummer sample packs)
    and humanise to sound like a specific player.
+
+6. **6/8 support** — add `grid` parameter to `quantise_to_grid` (`"16"` default,
+   `"8"` for compound meter). Auto-detect from MIDI `time_signature` meta-message.
+   Reuse existing 4/4 profiles — timing deviations are per-instrument in ms and
+   transfer reasonably. No new profile data needed.
 
 **Do items 1 + 3 together** — both require rebuilding profiles and changing the
 bucket key structure. Breaking change, worth batching.
