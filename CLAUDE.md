@@ -78,6 +78,37 @@ profile build. Hi-hats and cymbals are exempt.
 in v1. The v2 upgrade replaces this with `scipy.stats.gaussian_kde` — the tuple
 pair storage format is designed to make this a drop-in replacement.
 
+## v2 priorities (from real-world testing)
+
+Ordered by musical impact:
+
+1. **Velocity-stratified buckets** — v1 treats all snare hits identically regardless
+   of velocity. Ghost notes (low velocity) and backbeats (high velocity) need separate
+   buckets: `rock|beat|snare|soft`, `rock|beat|snare|medium`, `rock|beat|snare|hard`.
+   Thresholds should be derived from actual GMD velocity distributions, not guessed.
+   Fallback chain gains one extra level: exact tier → drop tier → drop fill → global.
+   GMD rock|beat|snare has ~26,825 samples — enough to stratify even if soft hits are
+   10% of that.
+
+2. **`--timing-only` / `--velocity-only` flags** — apply timing humanisation without
+   touching velocity, or vice versa. Useful when input already has good velocity
+   variation (e.g. finger-drummed then quantised).
+
+3. **KDE sampling** — replace flat independent sampling with
+   `scipy.stats.gaussian_kde`. Storage format already supports this as a drop-in.
+   Do this alongside velocity stratification (both require rebuilding profiles).
+
+4. **Grid position awareness** — bucket key becomes
+   `(genre, beat_type, instrument, grid_position)`. Beat 1 kick vs off-beat kick
+   have different timing tendencies in real drumming.
+
+5. **Custom profile source** — `--profile path/to/custom.json` flag so users can
+   build profiles from their own MIDI packs (e.g. professional drummer sample packs)
+   and humanise to sound like a specific player.
+
+**Do items 1 + 3 together** — both require rebuilding profiles and changing the
+bucket key structure. Breaking change, worth batching.
+
 ## Implementation notes — completed modules
 
 ### build_profiles.py
