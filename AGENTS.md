@@ -35,6 +35,8 @@ All tests must pass before moving to the next module.
 | 4 | `pocketmidi/humanise.py` | done |
 | 5 | `pocketmidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
+| 7 | `--timing-only` / `--velocity-only` flags | done |
+| 8 | Velocity-stratified buckets + KDE sampling | pending |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -95,9 +97,7 @@ Ordered by musical impact:
    GMD rock|beat|snare has ~26,825 samples — enough to stratify even if soft hits are
    10% of that.
 
-2. **`--timing-only` / `--velocity-only` flags** — apply timing humanisation without
-   touching velocity, or vice versa. Useful when input already has good velocity
-   variation (e.g. finger-drummed then quantised).
+2. **`--timing-only` / `--velocity-only` flags** — done.
 
 3. **KDE sampling** — replace flat independent sampling with
    `scipy.stats.gaussian_kde`. Storage format already supports this as a drop-in.
@@ -150,21 +150,14 @@ Non-obvious implementation decisions:
 - **Packaging:** `[tool.hatch.build] include` covers both wheel and sdist so
   `pocketmidi/profiles/*.json` ships in all distribution formats.
 
-## Implementation details — pending modules
+## Implementation notes — pending modules
 
-### humanise.py
-- Pre-compute marginal arrays **at profile load time**, not per-hit:
-  ```python
-  offsets = np.array([p[0] for p in pairs])
-  vel_deltas = np.array([p[1] for p in pairs])
-  ```
-- Filter `note_on` with `velocity=0` — these are note-offs in disguise, not real hits
-- Dense hit safety: `new_time = max(prev_event_time + epsilon, new_time)`
-  — `prev_event_time` is the timestamp of the last emitted **note-on**, not note-end (drum note lengths are artificial)
-- Clamp output velocity to 1–127; never produce negative delta times; never reorder notes
-- `np.random.seed(seed)` — seed applies to numpy random state and affects both timing and velocity sampling
-
-### cli.py
-- Entry point: `pocketmidi <input.mid> <output.mid>`
-- Flags: `--genre rock`, `--intensity 0.7`, `--section beat|fill` (default: `beat`), `--seed 42`, `--verbose`
-- `--verbose`: log which fallback level was used per hit
+### Module 8: velocity-stratified buckets + KDE sampling
+Requires rebuilding `pocketmidi/profiles/rock.json`. Breaking change — batch together.
+- `build_profiles.py`: add velocity tier (soft/medium/hard) to bucket key for kick and snare;
+  thresholds derived from tertile splits of actual GMD velocity distributions per instrument group;
+  write thresholds to a `_meta` key in the JSON
+- `humanise.py`: update `_lookup` to 5-level fallback chain (add tier → drop tier → drop fill → global);
+  replace independent random draws with 2D joint `scipy.stats.gaussian_kde` fit at load time;
+  classify hit velocity against `_meta` thresholds to pick tier
+- `pyproject.toml`: add `scipy` dependency
