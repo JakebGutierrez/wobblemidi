@@ -36,7 +36,7 @@ All tests must pass before moving to the next module.
 | 5 | `pocketmidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
 | 7 | `--timing-only` / `--velocity-only` flags | done |
-| 8 | Velocity-stratified buckets + KDE sampling | pending |
+| 8 | Velocity-stratified buckets + KDE sampling | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -150,25 +150,22 @@ Non-obvious implementation decisions:
 - **Packaging:** `[tool.hatch.build] include` covers both wheel and sdist so
   `pocketmidi/profiles/*.json` ships in all distribution formats.
 
-## Implementation notes — pending modules
+## Implementation notes — completed modules (module 8)
 
 ### Module 8: velocity-stratified buckets + KDE sampling
-Requires rebuilding `pocketmidi/profiles/rock.json`. Breaking change — batch together.
-- `build_profiles.py`: add velocity tier (soft/medium/hard) to bucket key for kick and snare;
-  thresholds derived from tertile splits of actual GMD velocity distributions per instrument group;
-  write thresholds to a `_meta` key in the JSON
-- `humanise.py`: update `_lookup` to 5-level fallback chain (add tier → drop tier → drop fill → global);
-  replace independent random draws with 2D joint `scipy.stats.gaussian_kde` fit at load time;
-  classify hit velocity against `_meta` thresholds to pick tier
-- `pyproject.toml`: add `scipy` dependency
+Done. rock.json rebuilt: kick tertiles 56/79, snare tertiles 52/117. 38 buckets.
 
-**Velocity tier thresholds — use tertiles, not fixed values.** Split soft/medium/hard
-at the 33rd and 66th percentile of actual GMD velocities per instrument group. Compute
-per instrument (kick and snare have different typical velocity ranges). Write thresholds
-to `_meta` in the JSON.
+- `build_profiles.py`: stratified tier buckets (`rock|{beat_type}|{instrument}|soft/medium/hard`)
+  for kick and snare only; thresholds from post-filter tertiles; `_meta` key carries
+  `velocity_thresholds` and `kde_bw_method` (default `"scott"`)
+- `humanise.py`: `BucketProfile` / `LoadedProfile` dataclasses; `load_profile` validates
+  `kde_bw_method` and fits 2D KDE per bucket at load time; `_lookup` uses 4-level fallback
+  for kick/snare (exact tier → drop tier → drop fill → global), 3-level for all others;
+  `_sample_bucket` replaces dual index draws with `kde.resample(1)`; degenerate buckets
+  keep `kde=None` and fall back to uniform pair sampling
 
-**KDE — fit at load time, not per hit.** Fit once in `load_profile`, store fitted KDE
-objects in the profile dict. Never refit inside the per-hit loop.
+**Bandwidth tuning:** change `KDE_BW_METHOD` in `build_profiles.py`, rebuild profile.
+`load_profile` reads it from `_meta` — no code changes to `humanise.py` needed.
 
 **KDE bandwidth — check by ear after first rebuild.** Scott's rule is the default.
 Hi-hat timing can be bimodal (on-grid and behind-the-beat clusters) — Scott's rule

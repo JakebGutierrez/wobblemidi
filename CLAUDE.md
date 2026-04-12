@@ -31,7 +31,7 @@ All tests must pass before moving to the next module.
 | 5 | `pocketmidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
 | 7 | `--timing-only` / `--velocity-only` flags | done |
-| 8 | Velocity-stratified buckets + KDE sampling | pending |
+| 8 | Velocity-stratified buckets + KDE sampling | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -128,7 +128,7 @@ Non-obvious implementation decisions:
   `"global|instrument_group"` for pooled. Values are `[[offset_ms, vel_delta], ...]`.
 - **File/parse errors** are silently skipped with a counter; the script continues.
 
-## Implementation notes — module 8 (pending): velocity-stratified buckets + KDE sampling
+## Implementation notes — module 8: velocity-stratified buckets + KDE sampling
 
 Requires rebuilding `pocketmidi/profiles/rock.json`. Batch items 1 + 3 together —
 both require a profile rebuild and changes to the bucket key structure.
