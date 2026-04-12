@@ -795,3 +795,72 @@ class TestHumaniseNoProfile:
         note_on = next((t, m) for t, m in events if m.type == "note_on" and m.velocity > 0)
         assert note_on[0] == 480
         assert note_on[1].velocity == 80
+
+
+# ---------------------------------------------------------------------------
+# TestHumaniseFlags
+# ---------------------------------------------------------------------------
+
+_FLAGS_PROFILES = {"rock|beat|kick": [[5.0, 10.0]]}  # non-zero offset and vel_delta
+
+
+class TestHumaniseFlags:
+    def test_timing_only_preserves_velocity(self, tmp_path):
+        # timing_only=True: offset applied, velocity untouched
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        out = _run_humanise(mid, _FLAGS_PROFILES, tmp_path,
+                            genre="rock", beat_type="beat", timing_only=True, seed=0)
+        events = _collect_abs(out)
+        note_ons = [(t, m) for t, m in events if m.type == "note_on" and m.velocity > 0]
+        assert len(note_ons) == 1
+        tick, msg = note_ons[0]
+        assert msg.velocity == 64          # velocity unchanged
+        assert tick != 480                 # timing was shifted
+
+    def test_velocity_only_preserves_position(self, tmp_path):
+        # velocity_only=True: velocity changed, position untouched (bypass path)
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        out = _run_humanise(mid, _FLAGS_PROFILES, tmp_path,
+                            genre="rock", beat_type="beat", velocity_only=True, seed=0)
+        events = _collect_abs(out)
+        note_ons = [(t, m) for t, m in events if m.type == "note_on" and m.velocity > 0]
+        assert len(note_ons) == 1
+        tick, msg = note_ons[0]
+        assert tick == 480                 # position unchanged
+        assert msg.velocity != 64          # velocity was shifted
+
+    def test_velocity_only_same_tick_notes(self, tmp_path):
+        # Two kicks on the exact same tick: both must stay at original position.
+        # Regression anchor — the old `candidate = abs_t` approach would bump the
+        # second note to abs_t + EPSILON_TICKS via the prev_note_on_abs lower bound.
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=480),
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=0),   # same abs tick
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=0),
+        ])
+        out = _run_humanise(mid, _FLAGS_PROFILES, tmp_path,
+                            genre="rock", beat_type="beat", velocity_only=True, seed=0)
+        events = _collect_abs(out)
+        note_on_ticks = [t for t, m in events if m.type == "note_on" and m.velocity > 0]
+        assert len(note_on_ticks) == 2
+        assert note_on_ticks[0] == 480     # first note at original tick
+        assert note_on_ticks[1] == 480     # second note also at original tick (not bumped)
+
+    def test_both_flags_raises(self, tmp_path):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=480),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        inp = _save_load(mid, tmp_path)
+        out = tmp_path / "out.mid"
+        prof_path = _write_profile(tmp_path, _FLAGS_PROFILES)
+        profs = load_profile(prof_path)
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            humanise(inp, out, profs, timing_only=True, velocity_only=True)

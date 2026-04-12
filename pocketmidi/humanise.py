@@ -25,6 +25,8 @@ def load_profile(path: str | Path) -> dict[str, ProfileArrays]:
     for key, pairs in raw.items():
         if not pairs:
             continue
+        # Assumes well-formed pairs [[offset_ms, vel_delta], ...].
+        # Add shape/type validation here when --profile (custom user paths) is implemented.
         arr = np.array(pairs)            # shape (N, 2)
         profiles[key] = (arr[:, 0], arr[:, 1])
     return profiles
@@ -109,7 +111,11 @@ def humanise(
     intensity: float = 1.0,
     seed: int | None = None,
     verbose: bool = False,
+    timing_only: bool = False,
+    velocity_only: bool = False,
 ) -> None:
+    if timing_only and velocity_only:
+        raise ValueError("timing_only and velocity_only are mutually exclusive")
     np.random.seed(seed)
 
     mid = mido.MidiFile(str(input_path))
@@ -175,12 +181,26 @@ def humanise(
                 offsets, vel_deltas = arrays
                 i = np.random.randint(len(offsets))
                 j = np.random.randint(len(vel_deltas))
+
+                if velocity_only:
+                    vel_delta = vel_deltas[j] * intensity
+                    new_vel = max(1, min(127, round(msg.velocity + vel_delta)))
+                    out_abs.append((abs_t, msg.copy(velocity=new_vel)))
+                    prev_note_on_abs = abs_t
+                    prev_emitted_abs = abs_t
+                    if verbose:
+                        print(f"  note {msg.note} ({group}): level {level}")
+                    continue
+
                 grid_tick = quantise_to_grid(abs_t, ppq)
                 candidate = grid_tick + _ms_offset_to_ticks(
                     grid_tick, offsets[i] * intensity, tempo_map, ppq
                 )
-                vel_delta = vel_deltas[j] * intensity
-                new_vel = max(1, min(127, round(msg.velocity + vel_delta)))
+                if timing_only:
+                    new_vel = msg.velocity
+                else:
+                    vel_delta = vel_deltas[j] * intensity
+                    new_vel = max(1, min(127, round(msg.velocity + vel_delta)))
 
                 lower = max(prev_emitted_abs, prev_note_on_abs + EPSILON_TICKS)
                 upper_exclusive = min(
