@@ -142,6 +142,31 @@ def quantise_to_grid(time_ticks: int, ppq: int) -> int:
         return time_ticks - remainder + sixteenth
 
 
+def grid_position_in_bar(grid_tick: int, ppq: int) -> int:
+    """16th-note index within a 4/4 bar (0–15).
+
+    Position 0 = beat 1 downbeat, 4 = beat 2, 8 = beat 3, 12 = beat 4.
+    Assumes 4/4 time (hardcoded for v1; GMD rock dataset is 4/4 throughout).
+    """
+    sixteenth = ppq // 4          # matches quantise_to_grid() — integer division
+    ticks_per_bar = 16 * sixteenth  # bar length on the quantised grid, not ppq * 4
+    return (grid_tick % ticks_per_bar) // sixteenth
+
+
+def is_four_four(midi_file) -> bool:
+    """Return True if all time_signature messages in the file are 4/4.
+
+    MIDI default when no time_signature is present is 4/4, so files with no
+    time_signature events return True.
+    """
+    for track in midi_file.tracks:
+        for msg in track:
+            if msg.type == "time_signature":
+                if msg.numerator != 4 or msg.denominator != 4:
+                    return False
+    return True
+
+
 def offset_ticks_to_ms(
     note_ticks: int,
     grid_ticks: int,

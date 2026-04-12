@@ -25,6 +25,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
+    grid_position_in_bar,
+    is_four_four,
     quantise_to_grid,
     ticks_to_ms_with_map,
 )
@@ -83,6 +85,10 @@ def main(gmd_dir: Path) -> None:
             skipped_files += 1
             continue
 
+        if not is_four_four(midi):
+            skipped_files += 1
+            continue
+
         ppq = midi.ticks_per_beat
         tempo_map = build_tempo_map(midi)
 
@@ -103,6 +109,7 @@ def main(gmd_dir: Path) -> None:
                     continue
 
                 grid_tick = quantise_to_grid(abs_tick, ppq)
+                grid_pos = grid_position_in_bar(grid_tick, ppq)
 
                 # Signed offset: positive = late, negative = early
                 # Use ticks_to_ms_with_map for both legs so tempo changes
@@ -118,6 +125,7 @@ def main(gmd_dir: Path) -> None:
                         "instrument_group": instrument_group,
                         "offset_ms": offset_ms,
                         "velocity": float(msg.velocity),
+                        "grid_pos": grid_pos,
                     }
                 )
 
@@ -157,7 +165,19 @@ def main(gmd_dir: Path) -> None:
             tier = _velocity_tier(h["velocity"], thresholds)
             tier_buckets[(h["beat_type"], h["instrument_group"], tier)].append(h)
 
-    # 4b. Global buckets: global|{instrument_group}
+    # 4b. Grid-position-aware buckets (all instruments)
+    grid_style_buckets: dict[tuple[str, str, int], list[dict]] = defaultdict(list)
+    grid_tier_buckets: dict[tuple[str, str, str, int], list[dict]] = defaultdict(list)
+
+    for h in raw_hits:
+        gp = h["grid_pos"]
+        grid_style_buckets[(h["beat_type"], h["instrument_group"], gp)].append(h)
+        if h["instrument_group"] in STRATIFIED_GROUPS:
+            thresholds = velocity_thresholds[h["instrument_group"]]
+            tier = _velocity_tier(h["velocity"], thresholds)
+            grid_tier_buckets[(h["beat_type"], h["instrument_group"], tier, gp)].append(h)
+
+    # 4c. Global buckets: global|{instrument_group}
     global_buckets: dict[str, list[dict]] = defaultdict(list)
     for h in raw_hits:
         global_buckets[h["instrument_group"]].append(h)
@@ -169,7 +189,25 @@ def main(gmd_dir: Path) -> None:
     written = 0
     skipped_buckets = 0
 
-    # Stratified buckets (kick and snare only)
+    # Grid-position-stratified, velocity-tiered (kick/snare): rock|beat_type|instr|tier|grid_pos
+    for (beat_type, instrument_group, tier, gp), hits in grid_tier_buckets.items():
+        if len(hits) < MIN_SAMPLES:
+            skipped_buckets += 1
+            continue
+        key = f"rock|{beat_type}|{instrument_group}|{tier}|{gp}"
+        profiles[key] = _build_pairs(hits)
+        written += 1
+
+    # Grid-position-aware, unstratified: rock|beat_type|instr|grid_pos
+    for (beat_type, instrument_group, gp), hits in grid_style_buckets.items():
+        if len(hits) < MIN_SAMPLES:
+            skipped_buckets += 1
+            continue
+        key = f"rock|{beat_type}|{instrument_group}|{gp}"
+        profiles[key] = _build_pairs(hits)
+        written += 1
+
+    # Stratified buckets (kick and snare only — fallback for grid-pos levels)
     for (beat_type, instrument_group, tier), hits in tier_buckets.items():
         if len(hits) < MIN_SAMPLES:
             skipped_buckets += 1
