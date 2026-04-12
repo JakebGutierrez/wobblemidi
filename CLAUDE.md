@@ -104,9 +104,10 @@ Ordered by musical impact:
    `(genre, beat_type, instrument, grid_position)`. Beat 1 kick vs off-beat kick
    have different timing tendencies in real drumming.
 
-5. **Custom profile source** — `--profile path/to/custom.json` flag so users can
-   build profiles from their own MIDI packs (e.g. professional drummer sample packs)
-   and humanise to sound like a specific player.
+5. **Custom profile source** *(deferred — out of scope for now)* — `--profile
+   path/to/custom.json` flag so users can build profiles from their own MIDI packs
+   (e.g. professional drummer sample packs) and humanise to sound like a specific
+   player. Revisit if there is a concrete use case requiring a non-GMD source.
 
 6. **6/8 support** — add `grid` parameter to `quantise_to_grid` (`"16"` default,
    `"8"` for compound meter). Auto-detect from MIDI `time_signature` meta-message.
