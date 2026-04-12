@@ -37,6 +37,8 @@ All tests must pass before moving to the next module.
 | 6 | `tests/test_humanise.py` | done |
 | 7 | `--timing-only` / `--velocity-only` flags | done |
 | 8 | Velocity-stratified buckets + KDE sampling | done |
+| 9 | Grid position awareness | done |
+| 10 | Outlier clipping (KDE tail fix) | next |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -62,7 +64,7 @@ not supported — GMD files are type 0/1.
 Jazz/funk profiles are explicitly out of scope (swing feel is misrepresented under
 a straight 16th grid).
 
-**Bucket key:** `(genre, beat_type, instrument_group)` — no grid position until v2.
+**Bucket key:** `(genre, beat_type, instrument_group, grid_position)` — grid_position is 0–15 (16th-note index in a 4/4 bar). See module 9 notes in CLAUDE.md.
 
 **Profile storage format:** List of `(offset_ms, vel_delta)` tuple pairs.
 Do NOT store as separate lists — that breaks the v2 KDE upgrade path.
