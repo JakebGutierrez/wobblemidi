@@ -32,6 +32,9 @@ All tests must pass before moving to the next module.
 | 6 | `tests/test_humanise.py` | done |
 | 7 | `--timing-only` / `--velocity-only` flags | done |
 | 8 | Velocity-stratified buckets + KDE sampling | done |
+| 9 | Grid position awareness | done |
+| 10 | Outlier clipping | done |
+| 11 | 6/8 support | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -47,9 +50,13 @@ Build one module at a time. Use plan mode for each new module.
 variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
 `pocketmidi/midi_utils.py`.
 
-**Grid:** Straight 16th-note grid only. No swing/triplet in v1.
+**Grid:** 16th-note grid by default; 8th-note grid for 6/8 files. No swing/triplet in v1.
 
-**Time signature:** Not read. Grid is always 16th notes derived from `ppq` (quarter notes). 3/4 works as-is. 6/8 requires an eighth-note grid — not yet implemented.
+**Time signature:** Auto-detected via `detect_meter()` in `midi_utils.py`. 6/8 files
+use an eighth-note grid (`ppq // 2`) and skip grid-position bucket lookups (pass
+`grid_pos=None` — positional buckets assume a 4/4 bar). Files that mix 6/8 with any
+other signature are rejected (a single grid choice cannot represent both sections).
+3/4 and other uniform quarter-note-based meters work on the 16th grid as-is.
 
 **MIDI file type:** Type 0 and type 1 only. `humanise.py` builds a single song-level
 tempo map and applies it across all tracks. Type 2 (independent per-track timing) is
@@ -109,10 +116,7 @@ Ordered by musical impact:
    (e.g. professional drummer sample packs) and humanise to sound like a specific
    player. Revisit if there is a concrete use case requiring a non-GMD source.
 
-6. **6/8 support** — add `grid` parameter to `quantise_to_grid` (`"16"` default,
-   `"8"` for compound meter). Auto-detect from MIDI `time_signature` meta-message.
-   Reuse existing 4/4 profiles — timing deviations are per-instrument in ms and
-   transfer reasonably. No new profile data needed.
+6. **6/8 support** — done. See implementation notes below.
 
 **Do items 1 + 3 together** — both require rebuilding profiles and changing the
 bucket key structure. Breaking change, worth batching.
@@ -215,19 +219,29 @@ profiles without grid-pos keys skip the check and work on any time signature.
 rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
 7 non-4/4 files skipped.
 
-## Next: outlier clipping (module 10)
+## Implementation notes — module 11: 6/8 support
 
-**Problem:** At intensity 0.3, some kick/snare hits land way off — sounds like a
-drummer struggling to keep time, not intentional feel. Root cause: KDE tails include
-genuine GMD performance mistakes (outlier timing values), not stylistic choices.
+**`detect_meter(midi_file) -> str`** in `midi_utils.py`:
+- Collects all `time_signature` events with absolute tick positions across all tracks.
+- Returns `"6/8"` only if every event is 6/8 AND the first is at tick 0 (no implicit
+  4/4 prefix).
+- Returns `"non-6/8"` when no 6/8 events are present — includes no events (MIDI default
+  4/4), uniform 4/4, uniform 3/4, and non-6/8 mixed-meter files (16th grid is valid for
+  all quarter-note-based meters, so non-6/8 mixing does not require rejection).
+- Raises `ValueError` if 6/8 is mixed with any other signature, or if the first 6/8
+  event is not at tick 0 (implicit 4/4 region before it counts as mixing).
 
-**Fix:** Clip extreme offset_ms values during profile build before fitting KDE.
-Trim hits beyond the 2nd/98th percentile of offset_ms **per bucket** in
-`build_profiles.py`, inside `_build_pairs` or just before it. This removes accident
-samples from the distribution entirely rather than masking them at runtime.
+**`quantise_to_grid(time_ticks, ppq, grid="16")`** — `"8"` uses `ppq // 2` subdivision.
+Default `"16"` is unchanged; all existing callers are unaffected.
 
-**Do NOT** cap at runtime in `humanise.py` — that treats the symptom. The profile
-should model intentional timing only.
+**`humanise()` changes:**
+- Calls `detect_meter(mid)` immediately after the type-2 check; sets `grid = "8"` for
+  6/8, `"16"` otherwise.
+- The 4/4 gate now uses `meter != "6/8"` to bypass for 6/8 files — they are accepted
+  even with grid-pos profiles (though grid_pos=None means no positional lookup).
+- Both note-processing loops pass `grid` to `quantise_to_grid` and compute
+  `gp = None if meter == "6/8" else grid_position_in_bar(grid_tick, ppq)`.
+  Passing `grid_pos=None` skips the positional bucket chain entirely and falls back
+  to the per-instrument ms deviation buckets, which transfer well across meters.
 
-Rebuild rock.json after implementing. Test with `--timing-only --intensity 0.3`
-on finger-drummed quantized MIDI — weird outlier hits should be gone.
+**No profile rebuild needed.** The existing rock.json is reused unchanged.

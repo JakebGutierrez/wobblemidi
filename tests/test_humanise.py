@@ -1126,13 +1126,119 @@ class TestHumaniseRejectsNonFourFour:
         with pytest.raises(ValueError, match="4/4"):
             humanise(inp, out, self._grid_pos_profile())
 
-    def test_six_eight_raises_with_grid_pos_profile(self, tmp_path):
-        mid = self._midi_with_time_sig(6, 8)
+    # --- helpers for 6/8 tests -------------------------------------------
+
+    def _six_eight_midi_with_kick(self, note_delta_from_boundary: int = 10) -> mido.MidiFile:
+        """6/8 file (time_sig at tick 0) with one kick note slightly off an 8th-note boundary."""
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.MetaMessage(
+            "time_signature",
+            numerator=6, denominator=8,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8,
+            time=0,
+        ))
+        # ppq=480 → 8th note = 240 ticks; place note slightly off boundary 0
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80,
+                                  time=note_delta_from_boundary))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=240))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        return mid
+
+    def _profile_with_kick_fallback(self) -> LoadedProfile:
+        """Grid-pos profile plus a non-positional 'rock|beat|kick' fallback with zero offset."""
+        return LoadedProfile(
+            buckets={
+                "rock|beat|kick|hard|3": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|kick":        _make_bucket((0.0, 0.0), (0.0, 0.0), (0.0, 0.0)),
+            },
+            velocity_thresholds={},
+        )
+
+    def _profile_kick_zero_offset(self) -> LoadedProfile:
+        """Plain profile with a zero-offset kick bucket — snapping to grid is the only movement."""
+        return LoadedProfile(
+            buckets={"rock|beat|kick": _make_bucket((0.0, 0.0), (0.0, 0.0), (0.0, 0.0))},
+            velocity_thresholds={},
+        )
+
+    # --- 6/8 tests -------------------------------------------------------
+
+    def test_six_eight_allowed_with_gridpos_profile(self, tmp_path):
+        # module 11: 6/8 (time_sig at tick 0) must no longer raise with grid-pos profile
+        mid = self._six_eight_midi_with_kick()
         inp = tmp_path / "in.mid"
         out = tmp_path / "out.mid"
         mid.save(str(inp))
-        with pytest.raises(ValueError, match="4/4"):
-            humanise(inp, out, self._grid_pos_profile())
+        humanise(inp, out, self._grid_pos_profile())   # must not raise
+
+    def test_six_eight_snaps_to_eighth_grid(self, tmp_path):
+        # Zero-offset profile — only movement is the grid snap; output tick must be
+        # a multiple of ppq // 2 (= 240 ticks for ppq=480).
+        mid = self._six_eight_midi_with_kick(note_delta_from_boundary=10)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._profile_kick_zero_offset(), seed=0)
+        result = mido.MidiFile(str(out))
+        eighth = DEFAULT_PPQ // 2
+        abs_tick = 0
+        note_ticks = []
+        for msg in result.tracks[0]:
+            abs_tick += msg.time
+            if msg.type == "note_on" and msg.velocity > 0 and msg.note == 36:
+                note_ticks.append(abs_tick)
+        assert note_ticks, "no kick note_on found in output"
+        for t in note_ticks:
+            assert t % eighth == 0, f"tick {t} is not on an 8th-note boundary (eighth={eighth})"
+
+    def test_six_eight_uses_non_positional_fallback(self, tmp_path):
+        # Grid-pos profile + 6/8 file → grid_pos=None → falls back to 'rock|beat|kick'
+        mid = self._six_eight_midi_with_kick()
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._profile_with_kick_fallback(), seed=0)  # must not raise
+
+    def test_six_eight_mixed_raises(self, tmp_path):
+        # 6/8 at tick 0 followed by a 4/4 event → mixed → ValueError
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.MetaMessage(
+            "time_signature", numerator=6, denominator=8,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0,
+        ))
+        track.append(mido.MetaMessage(
+            "time_signature", numerator=4, denominator=4,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=960,
+        ))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        with pytest.raises(ValueError, match="Mixed time signatures"):
+            humanise(inp, out, self._plain_profile())
+
+    def test_six_eight_late_start_raises(self, tmp_path):
+        # Single 6/8 event not at tick 0 → implicit 4/4 prefix → mixed → ValueError
+        mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=DEFAULT_TEMPO_US, time=0))
+        track.append(mido.MetaMessage(
+            "time_signature", numerator=6, denominator=8,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=480,
+        ))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        with pytest.raises(ValueError, match="implicit 4/4"):
+            humanise(inp, out, self._plain_profile())
 
     def test_three_four_accepted_with_plain_profile(self, tmp_path):
         # non-4/4 file + profile with NO grid-pos buckets → must not raise (regression guard)

@@ -17,6 +17,7 @@ from scipy.stats import gaussian_kde
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
+    detect_meter,
     grid_position_in_bar,
     is_four_four,
     quantise_to_grid,
@@ -233,14 +234,17 @@ def humanise(
     mid = mido.MidiFile(str(input_path))
     if mid.type == 2:
         raise ValueError("Type 2 MIDI files are not supported")
+    meter = detect_meter(mid)   # raises ValueError for 6/8 mixed with other signatures
+    grid = "8" if meter == "6/8" else "16"
     # Only enforce 4/4 when the profile contains grid-position-aware buckets.
     # A grid-pos key ends with a numeric segment (e.g. "rock|beat|kick|hard|3").
-    # Profiles without such keys fall back to the pre-grid-pos chain and work on
-    # any time signature, so rejecting them here would be a regression.
+    # Plain profiles work on any uniform time signature and on non-6/8 mixed-meter
+    # files (the 16th-note grid is valid for all quarter-note-based meters).
+    # detect_meter() above has already rejected 6/8-mixed files for all profiles.
     profile_has_grid_pos = any(
         key.split("|")[-1].isdigit() for key in profiles.buckets
     )
-    if profile_has_grid_pos and not is_four_four(mid):
+    if profile_has_grid_pos and meter != "6/8" and not is_four_four(mid):
         raise ValueError(
             "Only 4/4 time is supported (the loaded profile contains grid-position "
             "buckets that assume a 4/4 bar length). "
@@ -271,7 +275,8 @@ def humanise(
                 and msg.note in TD11_TO_GROUP
             )
             if shiftable:
-                gp = grid_position_in_bar(quantise_to_grid(abs_t, ppq), ppq)
+                gp = (None if meter == "6/8"
+                      else grid_position_in_bar(quantise_to_grid(abs_t, ppq, grid), ppq))
                 shiftable = (
                     _lookup(
                         profiles, genre, beat_type, TD11_TO_GROUP[msg.note],
@@ -309,8 +314,9 @@ def humanise(
         for idx, (abs_t, msg) in enumerate(abs_messages):
             if will_shift[idx]:
                 group = TD11_TO_GROUP[msg.note]
-                grid_tick = quantise_to_grid(abs_t, ppq)
-                grid_pos = grid_position_in_bar(grid_tick, ppq)
+                grid_tick = quantise_to_grid(abs_t, ppq, grid)
+                grid_pos = (None if meter == "6/8"
+                            else grid_position_in_bar(grid_tick, ppq))
                 bucket, level = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
                 offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 

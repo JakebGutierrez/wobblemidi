@@ -39,7 +39,7 @@ All tests must pass before moving to the next module.
 | 8 | Velocity-stratified buckets + KDE sampling | done |
 | 9 | Grid position awareness | done |
 | 10 | Outlier clipping (KDE tail fix) | done |
-| 11 | 6/8 support | next |
+| 11 | 6/8 support | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -55,9 +55,12 @@ Build one module at a time. Use plan mode for each new module.
 variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
 `pocketmidi/midi_utils.py`.
 
-**Grid:** Straight 16th-note grid only. No swing/triplet in v1.
+**Grid:** 16th-note grid by default; 8th-note grid for 6/8 files. No swing/triplet in v1.
 
-**Time signature:** Not read. Grid is always 16th notes derived from `ppq` (quarter notes). 3/4 works as-is. 6/8 requires an eighth-note grid — not yet implemented.
+**Time signature:** Auto-detected via `detect_meter()` in `midi_utils.py`. 6/8 uses
+an eighth-note grid and skips grid-position lookups (`grid_pos=None`). Files mixing
+6/8 with other signatures are rejected. 3/4 and other uniform quarter-note meters use
+the 16th grid unchanged.
 
 **MIDI file type:** Type 0 and type 1 only. `humanise.py` builds a single song-level
 tempo map and applies it across all tracks. Type 2 (independent per-track timing) is
@@ -107,10 +110,7 @@ Ordered by musical impact:
    (e.g. professional drummer sample packs) and humanise to sound like a specific
    player. Revisit if there is a concrete use case requiring a non-GMD source.
 
-6. **6/8 support** — add `grid` parameter to `quantise_to_grid` (`"16"` default,
-   `"8"` for compound meter). Auto-detect from MIDI `time_signature` meta-message.
-   Reuse existing 4/4 profiles — timing deviations are per-instrument in ms and
-   transfer reasonably. No new profile data needed.
+6. **6/8 support** — done. See module 11 notes in CLAUDE.md.
 
 ## Implementation notes — completed modules
 
