@@ -38,7 +38,8 @@ All tests must pass before moving to the next module.
 | 7 | `--timing-only` / `--velocity-only` flags | done |
 | 8 | Velocity-stratified buckets + KDE sampling | done |
 | 9 | Grid position awareness | done |
-| 10 | Outlier clipping (KDE tail fix) | next |
+| 10 | Outlier clipping (KDE tail fix) | done |
+| 11 | 6/8 support | next |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -93,35 +94,23 @@ pair storage format is designed to make this a drop-in replacement.
 
 Ordered by musical impact:
 
-1. **Velocity-stratified buckets** — v1 treats all snare hits identically regardless
-   of velocity. Ghost notes (low velocity) and backbeats (high velocity) need separate
-   buckets: `rock|beat|snare|soft`, `rock|beat|snare|medium`, `rock|beat|snare|hard`.
-   Thresholds should be derived from actual GMD velocity distributions, not guessed.
-   Fallback chain gains one extra level: exact tier → drop tier → drop fill → global.
-   GMD rock|beat|snare has ~26,825 samples — enough to stratify even if soft hits are
-   10% of that.
+1. **Velocity-stratified buckets** — done. kick tertiles 57/80, snare 53/118.
 
 2. **`--timing-only` / `--velocity-only` flags** — done.
 
-3. **KDE sampling** — replace flat independent sampling with
-   `scipy.stats.gaussian_kde`. Storage format already supports this as a drop-in.
-   Do this alongside velocity stratification (both require rebuilding profiles).
+3. **KDE sampling** — done. `scipy.stats.gaussian_kde` fitted at load time per bucket.
 
-4. **Grid position awareness** — bucket key becomes
-   `(genre, beat_type, instrument, grid_position)`. Beat 1 kick vs off-beat kick
-   have different timing tendencies in real drumming.
+4. **Grid position awareness** — done. See module 9 notes below.
 
-5. **Custom profile source** — `--profile path/to/custom.json` flag so users can
-   build profiles from their own MIDI packs (e.g. professional drummer sample packs)
-   and humanise to sound like a specific player.
+5. **Custom profile source** *(deferred — out of scope for now)* — `--profile
+   path/to/custom.json` flag so users can build profiles from their own MIDI packs
+   (e.g. professional drummer sample packs) and humanise to sound like a specific
+   player. Revisit if there is a concrete use case requiring a non-GMD source.
 
 6. **6/8 support** — add `grid` parameter to `quantise_to_grid` (`"16"` default,
    `"8"` for compound meter). Auto-detect from MIDI `time_signature` meta-message.
    Reuse existing 4/4 profiles — timing deviations are per-instrument in ms and
    transfer reasonably. No new profile data needed.
-
-**Do items 1 + 3 together** — both require rebuilding profiles and changing the
-bucket key structure. Breaking change, worth batching.
 
 ## Implementation notes — completed modules
 
@@ -181,3 +170,44 @@ Hi-hat timing can be bimodal (on-grid and behind-the-beat clusters) — Scott's 
 may over-smooth this into one blob, making the hi-hat feel smeared rather than
 pocketed. Listen to a hi-hat pattern after rebuild and adjust bandwidth in
 `build_profiles.py` if needed. Not a CLI flag.
+
+## Implementation notes — module 9: grid position awareness
+
+Bucket key gains a 16th-note grid-position dimension (0–15 within a 4/4 bar).
+`grid_position_in_bar(grid_tick, ppq)` uses `16 * (ppq // 4)` for bar length —
+NOT `ppq * 4` — so the wrap is consistent with the truncated `quantise_to_grid`
+sixteenth. Using `ppq * 4` breaks for any PPQ not divisible by 4.
+
+Stratified fallback chain with grid_pos (6 levels):
+1. `rock|beat|kick|hard|3` — tier + grid_pos
+2. `rock|beat|kick|3` — unstratified + grid_pos (keeps position signal past tier miss)
+3. `rock|beat|kick|hard` — tier only
+4. `rock|beat|kick` — style only
+5. `rock|beat|kick` — drop fill context
+6. `global|kick`
+
+`grid_pos=None` → offset=0 → levels 1,2,3,4 unchanged (backward compat).
+
+4/4 gate in `humanise()` is conditional: only fires when the loaded profile
+contains grid-pos buckets (detected by `key.split("|")[-1].isdigit()`). Legacy
+profiles without grid-pos keys skip the check and work on any time signature.
+
+rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
+7 non-4/4 files skipped.
+
+## Implementation notes — module 10: outlier clipping
+
+Clips `offset_ms` to the 2nd–98th percentile **per bucket** in `build_profiles.py`
+before KDE fitting, removing accidental timing errors (drummer mistakes) from GMD.
+
+Key design decisions:
+- Clipping is in `_build_pairs_with_clip` — a wrapper called by all five bucket-
+  family loops via `_build_profiles()`. Never in `humanise.py` at runtime.
+- `_build_profiles()` extracts the five phase-5 loops from `main()` so they are
+  independently testable.
+- MIN_SAMPLES gate is enforced on the **retained** (post-clip) set. Buckets that
+  shrink below 30 are skipped and fall through to the correct fallback.
+- `_build_pairs` itself is unchanged — it receives the already-clipped hit list.
+
+rock.json rebuilt: 311 buckets (4 fewer than pre-clip — near-threshold buckets
+that shrank below MIN_SAMPLES after clipping).
