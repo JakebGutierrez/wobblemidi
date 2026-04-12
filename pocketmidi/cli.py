@@ -18,10 +18,17 @@ from pocketmidi.humanise import load_profile, humanise
               help="Beat section type.")
 @click.option("--seed",      default=None,    type=int,
               help="Random seed for reproducibility.")
-@click.option("--verbose",   is_flag=True,
+@click.option("--verbose",       is_flag=True,
               help="Log per-hit fallback level.")
-def main(input_path, output_path, genre, intensity, section, seed, verbose):
+@click.option("--timing-only",   is_flag=True,
+              help="Apply timing humanisation only; leave velocities unchanged.")
+@click.option("--velocity-only", is_flag=True,
+              help="Apply velocity humanisation only; leave timing unchanged.")
+def main(input_path, output_path, genre, intensity, section, seed, verbose, timing_only, velocity_only):
     """Humanise programmed drum MIDI using real drummer performance data."""
+    if timing_only and velocity_only:
+        click.echo("Error: --timing-only and --velocity-only are mutually exclusive.", err=True)
+        sys.exit(1)
     resource = files("pocketmidi.profiles").joinpath(f"{genre}.json")
     try:
         with as_file(resource) as profile_path:
@@ -40,6 +47,8 @@ def main(input_path, output_path, genre, intensity, section, seed, verbose):
             intensity=intensity,
             seed=seed,
             verbose=verbose,
+            timing_only=timing_only,
+            velocity_only=velocity_only,
         )
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)

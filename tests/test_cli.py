@@ -180,3 +180,42 @@ class TestFlags:
             result = runner.invoke(main, [str(in_path), str(out_path), "--verbose"])
 
         assert result.exit_code == 0
+
+    def test_timing_only_passed_through(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path), "--timing-only"])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["timing_only"] is True
+        assert kwargs["velocity_only"] is False
+
+    def test_velocity_only_passed_through(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path), "--velocity-only"])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["velocity_only"] is True
+        assert kwargs["timing_only"] is False
+
+    def test_timing_and_velocity_only_exclusive(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        result = runner.invoke(main, [str(in_path), str(out_path),
+                                      "--timing-only", "--velocity-only"])
+
+        assert result.exit_code == 1
+        assert "mutually exclusive" in result.output
