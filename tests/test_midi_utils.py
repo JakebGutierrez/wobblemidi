@@ -6,6 +6,7 @@ import mido
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
+    detect_meter,
     get_tempo_at_tick,
     grid_position_in_bar,
     is_four_four,
@@ -292,3 +293,129 @@ class TestIsFourFour:
 
     def test_five_four(self):
         assert is_four_four(_midi_with_time_sig(5, 4)) is False
+
+
+# ---------------------------------------------------------------------------
+# TestQuantiseToGrid — grid="8" (eighth-note) additions
+# ---------------------------------------------------------------------------
+
+class TestQuantiseToGridEighth:
+    # ppq=480 → 8th note = 240 ticks
+
+    def test_on_boundary(self):
+        # Tick exactly on an 8th-note boundary stays put
+        assert quantise_to_grid(240, 480, grid="8") == 240
+
+    def test_snaps_late_back(self):
+        # 242 ticks: 2 ticks past 8th boundary at 240 → snaps back to 240
+        assert quantise_to_grid(242, 480, grid="8") == 240
+
+    def test_snaps_early_back(self):
+        # 238 ticks: 2 ticks before boundary at 240 → snaps back to 240
+        assert quantise_to_grid(238, 480, grid="8") == 240
+
+    def test_snaps_forward(self):
+        # 240 + 120 = 360: exactly halfway → snaps forward to 480
+        assert quantise_to_grid(360, 480, grid="8") == 480
+
+    def test_zero(self):
+        assert quantise_to_grid(0, 480, grid="8") == 0
+
+    def test_default_grid_unchanged(self):
+        # grid="16" default is still 16th-note behaviour
+        assert quantise_to_grid(482, 480) == 480
+
+
+# ---------------------------------------------------------------------------
+# TestDetectMeter
+# ---------------------------------------------------------------------------
+
+def _midi_with_time_sig_at(
+    numerator: int, denominator: int, abs_tick: int = 0
+) -> mido.MidiFile:
+    """Build a MidiFile whose single time_signature event is at *abs_tick*."""
+    mid = mido.MidiFile(type=0, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage(
+        "time_signature",
+        numerator=numerator,
+        denominator=denominator,
+        clocks_per_click=24,
+        notated_32nd_notes_per_beat=8,
+        time=abs_tick,  # delta-time from track start
+    ))
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    return mid
+
+
+def _midi_two_time_sigs(
+    num1: int, den1: int, num2: int, den2: int, tick2: int = 960
+) -> mido.MidiFile:
+    """Build a MidiFile with two time_signature events (first at tick 0, second at tick2)."""
+    mid = mido.MidiFile(type=0, ticks_per_beat=480)
+    track = mido.MidiTrack()
+    mid.tracks.append(track)
+    track.append(mido.MetaMessage(
+        "time_signature", numerator=num1, denominator=den1,
+        clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0,
+    ))
+    track.append(mido.MetaMessage(
+        "time_signature", numerator=num2, denominator=den2,
+        clocks_per_click=24, notated_32nd_notes_per_beat=8, time=tick2,
+    ))
+    track.append(mido.MetaMessage("end_of_track", time=0))
+    return mid
+
+
+class TestDetectMeter:
+    def test_no_time_sig_returns_non_six_eight(self):
+        mid = mido.MidiFile(type=0, ticks_per_beat=480)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        assert detect_meter(mid) == "non-6/8"
+
+    def test_four_four_returns_non_six_eight(self):
+        assert detect_meter(_midi_with_time_sig(4, 4)) == "non-6/8"
+
+    def test_three_four_returns_non_six_eight(self):
+        assert detect_meter(_midi_with_time_sig(3, 4)) == "non-6/8"
+
+    def test_mixed_four_four_three_four_returns_non_six_eight(self):
+        # Non-6/8 mixed meter does NOT raise — 16th grid is valid for both
+        assert detect_meter(_midi_two_time_sigs(4, 4, 3, 4)) == "non-6/8"
+
+    def test_six_eight_at_tick_zero_returns_six_eight(self):
+        assert detect_meter(_midi_with_time_sig(6, 8)) == "6/8"
+
+    def test_six_eight_late_start_raises(self):
+        # 6/8 event not at tick 0 → implicit 4/4 prefix → mixed meter
+        mid = _midi_with_time_sig_at(6, 8, abs_tick=480)
+        with pytest.raises(ValueError, match="implicit 4/4"):
+            detect_meter(mid)
+
+    def test_mixed_six_eight_four_four_raises(self):
+        mid = _midi_two_time_sigs(6, 8, 4, 4)
+        with pytest.raises(ValueError, match="Mixed time signatures"):
+            detect_meter(mid)
+
+    def test_mixed_multi_track_raises(self):
+        # 6/8 in track 0, 4/4 in track 1
+        mid = mido.MidiFile(type=1, ticks_per_beat=480)
+        t0 = mido.MidiTrack()
+        t0.append(mido.MetaMessage(
+            "time_signature", numerator=6, denominator=8,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0,
+        ))
+        t0.append(mido.MetaMessage("end_of_track", time=0))
+        t1 = mido.MidiTrack()
+        t1.append(mido.MetaMessage(
+            "time_signature", numerator=4, denominator=4,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0,
+        ))
+        t1.append(mido.MetaMessage("end_of_track", time=0))
+        mid.tracks.append(t0)
+        mid.tracks.append(t1)
+        with pytest.raises(ValueError, match="Mixed time signatures"):
+            detect_meter(mid)

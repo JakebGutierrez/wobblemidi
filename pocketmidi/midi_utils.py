@@ -122,24 +122,26 @@ def ticks_to_ms_with_map(
 # Grid quantisation
 # ---------------------------------------------------------------------------
 
-def quantise_to_grid(time_ticks: int, ppq: int) -> int:
-    """Snap *time_ticks* to the nearest 16th-note grid position.
+def quantise_to_grid(time_ticks: int, ppq: int, grid: str = "16") -> int:
+    """Snap *time_ticks* to the nearest grid position.
 
     Args:
         time_ticks:  Absolute tick position of a note.
         ppq:         Ticks per beat from the MIDI header.
+        grid:        Grid resolution: ``"16"`` for 16th notes (default),
+                     ``"8"`` for 8th notes (compound meters such as 6/8).
 
     Returns:
-        Nearest 16th-note grid position in ticks.
+        Nearest grid position in ticks.
     """
     if ppq <= 0:
         raise ValueError(f"ppq must be positive, got {ppq}")
-    sixteenth = ppq // 4
-    remainder = time_ticks % sixteenth
-    if remainder < sixteenth // 2:
+    subdivision = ppq // 4 if grid == "16" else ppq // 2
+    remainder = time_ticks % subdivision
+    if remainder < subdivision // 2:
         return time_ticks - remainder
     else:
-        return time_ticks - remainder + sixteenth
+        return time_ticks - remainder + subdivision
 
 
 def grid_position_in_bar(grid_tick: int, ppq: int) -> int:
@@ -165,6 +167,58 @@ def is_four_four(midi_file) -> bool:
                 if msg.numerator != 4 or msg.denominator != 4:
                     return False
     return True
+
+
+def detect_meter(midi_file) -> str:
+    """Return ``"6/8"`` if the file is uniformly 6/8 throughout; ``"non-6/8"`` otherwise.
+
+    Collects all ``time_signature`` meta-messages with their absolute tick positions.
+    If the first explicit 6/8 event is not at tick 0, there is an implicit 4/4 region
+    before it — this counts as mixing 6/8 with 4/4 and raises ``ValueError``.
+
+    Returns:
+        ``"6/8"``      — all ``time_signature`` events are 6/8 and the first is at tick 0.
+        ``"non-6/8"``  — no 6/8 events present (includes no events, uniform 4/4, uniform
+                         3/4, and any non-6/8 mixed-meter files).
+
+    Raises:
+        ValueError — the file mixes 6/8 with any other time signature, including an
+        implicit 4/4 prefix before the first 6/8 event.  All other mixed-meter files
+        (e.g. 4/4 + 3/4) return ``"non-6/8"`` without raising, since the 16th-note grid
+        is valid for any quarter-note-based meter.
+    """
+    events: list[tuple[int, int, int]] = []   # (abs_tick, numerator, denominator)
+    for track in midi_file.tracks:
+        abs_tick = 0
+        for msg in track:
+            abs_tick += msg.time
+            if msg.type == "time_signature":
+                events.append((abs_tick, msg.numerator, msg.denominator))
+
+    if not events:
+        return "non-6/8"    # implicit 4/4 throughout
+
+    events.sort(key=lambda x: x[0])
+    has_six_eight = any(num == 6 and den == 8 for _, num, den in events)
+
+    if not has_six_eight:
+        return "non-6/8"
+
+    # File contains at least one 6/8 event — any mixing is unsupported.
+    if events[0][0] != 0:
+        raise ValueError(
+            "Mixed time signatures (implicit 4/4, 6/8) are not supported. "
+            "The file must use a single time signature throughout."
+        )
+    non_six_eight = sorted({(num, den) for _, num, den in events
+                             if not (num == 6 and den == 8)})
+    if non_six_eight:
+        sigs = ", ".join(f"{n}/{d}" for n, d in sorted({(6, 8)} | set(non_six_eight)))
+        raise ValueError(
+            f"Mixed time signatures ({sigs}) are not supported. "
+            "The file must use a single time signature throughout."
+        )
+    return "6/8"
 
 
 def offset_ticks_to_ms(
