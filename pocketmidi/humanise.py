@@ -37,6 +37,7 @@ class BucketProfile:
 class LoadedProfile:
     buckets: dict[str, BucketProfile]
     velocity_thresholds: dict[str, tuple[float, float]]
+    bucket_offset_means: dict[str, float] = dataclasses.field(default_factory=dict)
 
 
 def load_profile(path: str | Path) -> LoadedProfile:
@@ -80,7 +81,14 @@ def load_profile(path: str | Path) -> LoadedProfile:
             kde = None
         buckets[key] = BucketProfile(offsets=offsets, vel_deltas=vel_deltas, kde=kde)
 
-    return LoadedProfile(buckets=buckets, velocity_thresholds=vel_thresholds)
+    bucket_offset_means: dict[str, float] = {
+        k: float(v) for k, v in meta.get("bucket_offset_means", {}).items()
+    }
+    return LoadedProfile(
+        buckets=buckets,
+        velocity_thresholds=vel_thresholds,
+        bucket_offset_means=bucket_offset_means,
+    )
 
 
 def _velocity_tier(velocity: int, thresholds: tuple[float, float]) -> str:
@@ -100,8 +108,8 @@ def _lookup(
     instrument_group: str,
     velocity: int,
     grid_pos: int | None = None,
-) -> tuple[BucketProfile | None, int | None]:
-    """Return the best-matching BucketProfile and its fallback level (1-based).
+) -> tuple[BucketProfile | None, int | None, str | None]:
+    """Return the best-matching BucketProfile, its fallback level (1-based), and the matched key.
 
     When grid_pos is provided, stratified instruments try tier+grid_pos then
     unstratified+grid_pos before dropping to non-grid keys (offset=2).
@@ -142,8 +150,8 @@ def _lookup(
 
     for level, key in candidates:
         if key in profile.buckets:
-            return profile.buckets[key], level
-    return None, None
+            return profile.buckets[key], level, key
+    return None, None, None
 
 
 def _ms_offset_to_ticks(
@@ -226,6 +234,7 @@ def humanise(
     verbose: bool = False,
     timing_only: bool = False,
     velocity_only: bool = False,
+    push: bool = False,
 ) -> None:
     if timing_only and velocity_only:
         raise ValueError("timing_only and velocity_only are mutually exclusive")
@@ -281,7 +290,7 @@ def humanise(
                     _lookup(
                         profiles, genre, beat_type, TD11_TO_GROUP[msg.note],
                         msg.velocity, grid_pos=gp,
-                    )[0] is not None
+                    )[0] is not None  # only first element needed here
                 )
             will_shift.append(shiftable)
 
@@ -317,7 +326,7 @@ def humanise(
                 grid_tick = quantise_to_grid(abs_t, ppq, grid)
                 grid_pos = (None if meter == "6/8"
                             else grid_position_in_bar(grid_tick, ppq))
-                bucket, level = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
+                bucket, level, key_used = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
                 offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
                 if velocity_only:
@@ -329,8 +338,11 @@ def humanise(
                         print(f"  note {msg.note} ({group}): level {level}")
                     continue
 
+                offset_ms = offset_ms_raw
+                if not push:
+                    offset_ms -= profiles.bucket_offset_means.get(key_used, 0.0)
                 candidate = grid_tick + _ms_offset_to_ticks(
-                    grid_tick, offset_ms_raw * intensity, tempo_map, ppq
+                    grid_tick, offset_ms * intensity, tempo_map, ppq
                 )
                 if timing_only:
                     new_vel = msg.velocity

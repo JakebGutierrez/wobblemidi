@@ -201,13 +201,56 @@ Clips `offset_ms` to the 2nd–98th percentile **per bucket** in `build_profiles
 before KDE fitting, removing accidental timing errors (drummer mistakes) from GMD.
 
 Key design decisions:
-- Clipping is in `_build_pairs_with_clip` — a wrapper called by all five bucket-
-  family loops via `_build_profiles()`. Never in `humanise.py` at runtime.
-- `_build_profiles()` extracts the five phase-5 loops from `main()` so they are
-  independently testable.
+- Clipping logic lives in `_clip_hits()` — a helper called by both
+  `_build_pairs_with_clip()` (public contract, tested directly) and
+  `_build_profiles()` (needs both pairs and mean from the same retained set).
+- `_build_pairs_with_clip()` itself is a thin wrapper so its `list | None` return
+  contract and existing unit tests are unchanged.
 - MIN_SAMPLES gate is enforced on the **retained** (post-clip) set. Buckets that
   shrink below 30 are skipped and fall through to the correct fallback.
 - `_build_pairs` itself is unchanged — it receives the already-clipped hit list.
 
 rock.json rebuilt: 311 buckets (4 fewer than pre-clip — near-threshold buckets
 that shrank below MIN_SAMPLES after clipping).
+
+## Implementation notes — module 11: 6/8 support
+
+**`detect_meter(midi_file) -> str`** in `midi_utils.py`:
+- Returns `"6/8"` only if every `time_signature` event is 6/8 AND the first is at
+  tick 0 (no implicit 4/4 prefix).
+- Returns `"non-6/8"` for no events (MIDI default 4/4), uniform 4/4, uniform 3/4,
+  and non-6/8 mixed-meter files (16th grid is valid for all quarter-note-based meters).
+- Raises `ValueError` if 6/8 is mixed with any other signature, or if the first 6/8
+  event is not at tick 0.
+
+**`quantise_to_grid(time_ticks, ppq, grid="16")`** — `"8"` uses `ppq // 2`.
+Default `"16"` unchanged; all existing callers unaffected.
+
+**`humanise()` changes:**
+- Calls `detect_meter(mid)` after the type-2 check; sets `grid = "8"` for 6/8.
+- 4/4 gate bypassed for 6/8 files (`meter != "6/8"`).
+- Both note-processing loops pass `grid` to `quantise_to_grid` and set
+  `gp = None if meter == "6/8"` — skips positional lookup, uses per-instrument
+  ms deviation buckets, which transfer well across meters.
+
+No profile rebuild needed.
+
+## Implementation notes — --push flag / offset de-bias
+
+**Problem:** GMD rock drummers push kick ahead of the beat at certain grid positions.
+At low intensity this creates a systematic early lean that sounds like rushing.
+
+**Design:** Per-bucket mean offsets stored in `_meta.bucket_offset_means` at build time.
+De-bias applied by default at sample time: bucket mean subtracted from `offset_ms_raw`
+before intensity scaling. `--push` restores original GMD behaviour.
+
+Key decisions:
+- `_clip_hits()` lets `_build_profiles()` access the retained set directly to compute
+  the mean, without changing `_build_pairs_with_clip()`'s return contract.
+- `_build_profiles()` returns `(profiles, bucket_offset_means, written, skipped)`.
+- `LoadedProfile.bucket_offset_means` has `default_factory=dict` — existing call
+  sites unchanged; old profiles without the key get 0.0 correction (backward compat).
+- `_lookup()` return extended to `(BucketProfile | None, int | None, str | None)`;
+  matched key used for mean lookup; level unchanged.
+- `_build_pairs` and `_sample_bucket` unchanged.
+- Requires profile rebuild to populate `bucket_offset_means` in `_meta`.

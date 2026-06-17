@@ -24,7 +24,10 @@ from pocketmidi.humanise import load_profile, humanise
               help="Apply timing humanisation only; leave velocities unchanged.")
 @click.option("--velocity-only", is_flag=True,
               help="Apply velocity humanisation only; leave timing unchanged.")
-def main(input_path, output_path, genre, intensity, section, seed, verbose, timing_only, velocity_only):
+@click.option("--push",          is_flag=True,
+              help="Include directional timing tendencies from source recordings. "
+                   "Without this flag, timing variation is centred on the grid.")
+def main(input_path, output_path, genre, intensity, section, seed, verbose, timing_only, velocity_only, push):
     """Humanise programmed drum MIDI using real drummer performance data."""
     if timing_only and velocity_only:
         click.echo("Error: --timing-only and --velocity-only are mutually exclusive.", err=True)
@@ -49,6 +52,7 @@ def main(input_path, output_path, genre, intensity, section, seed, verbose, timi
             verbose=verbose,
             timing_only=timing_only,
             velocity_only=velocity_only,
+            push=push,
         )
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)
