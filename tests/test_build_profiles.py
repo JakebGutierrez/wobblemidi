@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from build_profiles import MIN_SAMPLES, _build_pairs_with_clip, _build_profiles
+from build_profiles import MIN_SAMPLES, _build_pairs_with_clip, _build_profiles, _clip_hits
 
 
 # ── unit tests for _build_pairs_with_clip ────────────────────────────────────
@@ -68,7 +68,7 @@ def test_all_bucket_families_clip_outliers():
     ]
     hits = normal + extreme
 
-    profiles, written, _ = _build_profiles(
+    profiles, _, written, _ = _build_profiles(
         grid_tier_buckets  = {("beat", "kick", "hard", 0): hits},
         grid_style_buckets = {("beat", "kick", 0): hits},
         tier_buckets       = {("beat", "kick", "hard"): hits},
@@ -81,3 +81,39 @@ def test_all_bucket_families_clip_outliers():
         offsets = [p[0] for p in pairs]
         assert -9999.0 not in offsets, f"extreme offset survived in {key}"
         assert  9999.0 not in offsets, f"extreme offset survived in {key}"
+
+
+# ── unit tests for _clip_hits and bucket_offset_means ────────────────────────
+
+def test_clip_hits_returns_retained_set():
+    """_clip_hits removes outliers and returns the retained hit list."""
+    normal = [{"offset_ms": float(i % 20 - 10), "velocity": 80.0} for i in range(98)]
+    outliers = [{"offset_ms": -9999.0, "velocity": 10.0}, {"offset_ms": 9999.0, "velocity": 10.0}]
+    retained = _clip_hits(normal + outliers)
+    assert retained is not None
+    assert all(h["offset_ms"] != -9999.0 for h in retained)
+    assert all(h["offset_ms"] != 9999.0 for h in retained)
+
+
+def test_clip_hits_returns_none_below_min_samples():
+    """_clip_hits returns None when retained set falls below MIN_SAMPLES."""
+    hits = [{"offset_ms": 0.0, "velocity": 80.0} for _ in range(MIN_SAMPLES - 2)]
+    hits += [{"offset_ms": -9999.0, "velocity": 80.0}, {"offset_ms": 9999.0, "velocity": 80.0}]
+    assert _clip_hits(hits) is None
+
+
+def test_bucket_offset_means_written():
+    """_build_profiles writes bucket_offset_means for all five bucket families."""
+    n = MIN_SAMPLES + 5
+    hits = [{"offset_ms": 10.0, "velocity": 80.0} for _ in range(n)]
+    _, means, written, _ = _build_profiles(
+        grid_tier_buckets  = {("beat", "kick", "hard", 0): hits},
+        grid_style_buckets = {("beat", "kick", 0): hits},
+        tier_buckets       = {("beat", "kick", "hard"): hits},
+        style_buckets      = {("beat", "kick"): hits},
+        global_buckets     = {"kick": hits},
+    )
+    assert written == 5
+    assert len(means) == 5
+    for mean in means.values():
+        assert abs(mean - 10.0) < 1e-6

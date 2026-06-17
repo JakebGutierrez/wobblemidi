@@ -177,24 +177,24 @@ class TestLookup:
         )
 
     def test_level1_exact(self):
-        bucket, level = _lookup(self.profile, "rock", "beat", "kick", 80)
+        bucket, level, _ = _lookup(self.profile, "rock", "beat", "kick", 80)
         assert level == 1
         assert bucket is not None
 
     def test_level2_beat_fallback(self):
         # fill context not in buckets → should fall to beat (unstratified)
-        bucket, level = _lookup(self.profile, "rock", "fill", "snare", 80)
+        bucket, level, _ = _lookup(self.profile, "rock", "fill", "snare", 80)
         assert level == 2
         assert bucket is not None
 
     def test_level3_global(self):
         # hi-hat: 3-level chain; fill not present → beat not present → global
-        bucket, level = _lookup(self.profile, "rock", "fill", "hihat_closed", 80)
+        bucket, level, _ = _lookup(self.profile, "rock", "fill", "hihat_closed", 80)
         assert level == 3
         assert bucket is not None
 
     def test_total_miss(self):
-        bucket, level = _lookup(self.profile, "rock", "beat", "ride", 80)
+        bucket, level, _ = _lookup(self.profile, "rock", "beat", "ride", 80)
         assert bucket is None
         assert level is None
 
@@ -207,7 +207,7 @@ class TestLookup:
             },
             velocity_thresholds={"snare": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "snare", 30)  # 30 < 40 → soft
+        bucket, level, _ = _lookup(profile, "rock", "beat", "snare", 30)  # 30 < 40 → soft
         assert level == 1
         assert bucket is not None
 
@@ -219,7 +219,7 @@ class TestLookup:
             },
             velocity_thresholds={"snare": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "snare", 60)  # 40 <= 60 < 80 → medium
+        bucket, level, _ = _lookup(profile, "rock", "beat", "snare", 60)  # 40 <= 60 < 80 → medium
         assert level == 1
         assert bucket is not None
 
@@ -231,7 +231,7 @@ class TestLookup:
             },
             velocity_thresholds={"snare": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "snare", 100)  # 100 >= 80 → hard
+        bucket, level, _ = _lookup(profile, "rock", "beat", "snare", 100)  # 100 >= 80 → hard
         assert level == 1
         assert bucket is not None
 
@@ -243,7 +243,7 @@ class TestLookup:
             },
             velocity_thresholds={"snare": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "snare", 30)  # soft key absent
+        bucket, level, _ = _lookup(profile, "rock", "beat", "snare", 30)  # soft key absent
         assert level == 2
         assert bucket is not None
 
@@ -256,8 +256,8 @@ class TestLookup:
             },
             velocity_thresholds={"snare": (40.0, 80.0)},  # snare thresholds present, hihat absent
         )
-        bucket_soft, level_soft = _lookup(profile, "rock", "beat", "hihat_closed", 20)
-        bucket_hard, level_hard = _lookup(profile, "rock", "beat", "hihat_closed", 120)
+        bucket_soft, level_soft, _ = _lookup(profile, "rock", "beat", "hihat_closed", 20)
+        bucket_hard, level_hard, _ = _lookup(profile, "rock", "beat", "hihat_closed", 120)
         assert level_soft == 1
         assert level_hard == 1  # velocity has no effect; same bucket
 
@@ -1003,7 +1003,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={"kick": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=3)
+        bucket, level, _ = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=3)
         assert level == 1
         assert bucket is not None
 
@@ -1016,7 +1016,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={"kick": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
+        bucket, level, _ = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
         assert level == 2
         assert bucket is not None
 
@@ -1028,7 +1028,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={"kick": (40.0, 80.0)},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
+        bucket, level, _ = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=5)
         assert level == 3
         assert bucket is not None
 
@@ -1041,7 +1041,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=7)
+        bucket, level, _ = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=7)
         assert level == 1
         assert bucket is not None
 
@@ -1054,7 +1054,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={},
         )
-        bucket, level = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=2)
+        bucket, level, _ = _lookup(profile, "rock", "beat", "hihat_closed", 80, grid_pos=2)
         assert level == 2
         assert bucket is not None
 
@@ -1068,7 +1068,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={"kick": (40.0, 80.0)},
         )
-        _, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
+        _, level, _ = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
         assert level == 1  # rock|beat|kick|hard is level 1
 
     def test_grid_pos_none_tier_drop_is_level2(self):
@@ -1079,7 +1079,7 @@ class TestLookupGridPos:
             },
             velocity_thresholds={"kick": (40.0, 80.0)},
         )
-        _, level = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
+        _, level, _ = _lookup(profile, "rock", "beat", "kick", 100, grid_pos=None)
         assert level == 2
 
 
@@ -1265,3 +1265,86 @@ class TestHumaniseRejectsNonFourFour:
         out = tmp_path / "out.mid"
         mid.save(str(inp))
         humanise(inp, out, self._grid_pos_profile())  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# push vs no-push de-bias test
+# ---------------------------------------------------------------------------
+
+class TestPushFlag:
+    """push=True preserves directional offset; push=False (default) removes it."""
+
+    PPQ = 480
+    TEMPO_US = 500_000  # 120 BPM; 1 tick = 500_000/480 µs ≈ 1.042 ms
+
+    def _profile_with_known_mean(self) -> LoadedProfile:
+        """Profile with a constant +50ms offset bucket and bucket_offset_means set."""
+        # Three identical pairs → KDE is degenerate → falls back to uniform draw,
+        # which always returns 50.0 ms. No randomness, no clamping surprise.
+        offsets = np.array([50.0, 50.0, 50.0])
+        vel_deltas = np.array([0.0, 0.0, 0.0])
+        bucket = BucketProfile(offsets=offsets, vel_deltas=vel_deltas, kde=None)
+        return LoadedProfile(
+            buckets={"rock|beat|kick": bucket},
+            velocity_thresholds={},
+            bucket_offset_means={"rock|beat|kick": 50.0},
+        )
+
+    def _isolated_kick_midi(self, tmp_path: Path) -> Path:
+        """Single kick at tick 4*PPQ (bar 2 beat 1) — no neighbours, wide legal window."""
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        track = mido.MidiTrack()
+        mid.tracks.append(track)
+        track.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        # silence before the kick
+        track.append(mido.Message("note_on",  channel=9, note=36, velocity=80, time=4 * self.PPQ))
+        track.append(mido.Message("note_off", channel=9, note=36, velocity=0,  time=self.PPQ))
+        track.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "isolated_kick.mid"
+        mid.save(str(p))
+        return p
+
+    def _kick_abs_tick(self, path: Path) -> int:
+        mid = mido.MidiFile(str(path))
+        abs_tick = 0
+        for track in mid.tracks:
+            for msg in track:
+                abs_tick += msg.time
+                if msg.type == "note_on" and msg.velocity > 0 and msg.note == 36:
+                    return abs_tick
+        raise AssertionError("no kick found in output")
+
+    def test_push_true_applies_offset(self, tmp_path):
+        inp = self._isolated_kick_midi(tmp_path)
+        out = tmp_path / "out_push.mid"
+        profile = self._profile_with_known_mean()
+
+        humanise(inp, out, profile, seed=0, push=True)
+
+        grid_tick = 4 * self.PPQ
+        result_tick = self._kick_abs_tick(out)
+        # +50ms at 120 BPM → +50 / (500_000/480/1000) ≈ +48 ticks
+        expected_delta = round(50.0 / (self.TEMPO_US / self.PPQ / 1000.0))
+        assert result_tick == grid_tick + expected_delta
+
+    def test_push_false_removes_mean(self, tmp_path):
+        inp = self._isolated_kick_midi(tmp_path)
+        out = tmp_path / "out_nopush.mid"
+        profile = self._profile_with_known_mean()
+
+        humanise(inp, out, profile, seed=0, push=False)
+
+        grid_tick = 4 * self.PPQ
+        result_tick = self._kick_abs_tick(out)
+        # offset_ms = 50.0 - mean(50.0) = 0.0 → no displacement
+        assert result_tick == grid_tick
+
+    def test_push_false_is_default(self, tmp_path):
+        inp = self._isolated_kick_midi(tmp_path)
+        out = tmp_path / "out_default.mid"
+        profile = self._profile_with_known_mean()
+
+        humanise(inp, out, profile, seed=0)  # no push kwarg
+
+        grid_tick = 4 * self.PPQ
+        assert self._kick_abs_tick(out) == grid_tick

@@ -227,3 +227,29 @@ class TestFlags:
 
         assert result.exit_code == 1
         assert "mutually exclusive" in result.output
+
+    def test_push_passed_through(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path), "--push"])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["push"] is True
+
+    def test_push_default_false(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path)])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["push"] is False

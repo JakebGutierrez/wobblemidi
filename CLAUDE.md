@@ -219,6 +219,24 @@ profiles without grid-pos keys skip the check and work on any time signature.
 rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
 7 non-4/4 files skipped.
 
+## Implementation notes — module 10: outlier clipping
+
+Clips `offset_ms` to the 2nd–98th percentile **per bucket** in `build_profiles.py`
+before KDE fitting, removing accidental timing errors (drummer mistakes) from GMD.
+
+Key design decisions:
+- Clipping logic lives in `_clip_hits()` — a helper called by both
+  `_build_pairs_with_clip()` (public contract, tested directly) and
+  `_build_profiles()` (needs both pairs and mean from the same retained set).
+- `_build_pairs_with_clip()` itself is a thin wrapper so its `list | None` return
+  contract and existing unit tests are unchanged.
+- MIN_SAMPLES gate is enforced on the **retained** (post-clip) set. Buckets that
+  shrink below 30 are skipped and fall through to the correct fallback.
+- `_build_pairs` itself is unchanged — it receives the already-clipped hit list.
+
+rock.json rebuilt: 311 buckets (4 fewer than pre-clip — near-threshold buckets
+that shrank below MIN_SAMPLES after clipping).
+
 ## Implementation notes — module 11: 6/8 support
 
 **`detect_meter(midi_file) -> str`** in `midi_utils.py`:
@@ -245,3 +263,41 @@ Default `"16"` is unchanged; all existing callers are unaffected.
   to the per-instrument ms deviation buckets, which transfer well across meters.
 
 **No profile rebuild needed.** The existing rock.json is reused unchanged.
+
+## Implementation notes — --push flag / offset de-bias
+
+**Problem:** GMD rock drummers genuinely push kick (and other instruments) ahead of
+the beat at certain grid positions. At low intensity (e.g. 0.3) this creates a
+systematic early lean that sounds like a drummer rushing, not intentional feel.
+
+**Design:** Separate *systematic tendency* (push/pull) from *human variation* (spread).
+Per-bucket mean offsets are stored in `_meta.bucket_offset_means` at build time.
+At sample time in `humanise()`, de-bias is applied by default — the bucket mean is
+subtracted from `offset_ms_raw` before intensity scaling.
+
+`--push` restores the original GMD behaviour for users who want the authentic lean.
+
+**For README / end users:**
+```
+--push      Include the directional timing tendencies of the GMD source
+            drummers. Without this flag (default), timing variation is
+            centred on the grid — natural human imprecision without
+            systematic push or drag. Use --push if you want a specific
+            "leaning into the beat" feel that matches the original recordings.
+```
+
+Key implementation decisions:
+- `_clip_hits()` extracts the retain/clip logic so `_build_profiles()` can compute
+  `mean = np.mean([h["offset_ms"] for h in retained])` from the same retained set
+  used for KDE fitting, without changing `_build_pairs_with_clip()`'s return contract.
+- `_build_profiles()` returns `(profiles, bucket_offset_means, written, skipped)`.
+- `LoadedProfile` gains `bucket_offset_means: dict[str, float]` with
+  `default_factory=dict` — all existing `LoadedProfile(...)` call sites are unaffected.
+- `_lookup()` return type extended to `(BucketProfile | None, int | None, str | None)`.
+  The matched key is used to look up the mean; level and its meaning are unchanged.
+- De-bias is applied to `offset_ms_raw` from `_sample_bucket()` before intensity:
+  `offset_ms = offset_ms_raw - profiles.bucket_offset_means.get(key_used, 0.0)`.
+  Old profiles without `bucket_offset_means` in `_meta` → empty dict → 0.0 correction
+  (backward compatible, behaviour is push=True equivalent on old profiles).
+- `_build_pairs` and `_sample_bucket` are unchanged.
+- Requires profile rebuild to populate `bucket_offset_means` in `_meta`.
