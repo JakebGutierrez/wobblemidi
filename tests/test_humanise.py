@@ -107,7 +107,7 @@ class TestLoadProfile:
     def test_kde_fitted(self, tmp_path):
         # 3 non-identical points → KDE fits successfully; kde.d must be 2 (2D KDE).
         from scipy.stats import gaussian_kde
-        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[0.0, 0.0], [5.0, 10.0], [-5.0, -10.0]]})
+        prof_path = _write_profile(tmp_path, {"rock|beat|kick": [[0.0, 0.0], [5.0, 3.0], [-5.0, 8.0]]})
         profile = load_profile(prof_path)
         bucket = profile.buckets["rock|beat|kick"]
         assert isinstance(bucket.kde, gaussian_kde)
