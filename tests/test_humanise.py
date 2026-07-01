@@ -12,8 +12,11 @@ import numpy as np
 import pytest
 
 from pocketmidi.humanise import (
+    COUPLED_RESIDUAL_MS,
     EPSILON_TICKS,
+    RESIDUAL_SHARE,
     BucketProfile,
+    GrooveDrift,
     LoadedProfile,
     _lookup,
     _ms_offset_to_ticks,
@@ -21,7 +24,7 @@ from pocketmidi.humanise import (
     humanise,
     load_profile,
 )
-from pocketmidi.midi_utils import build_tempo_map
+from pocketmidi.midi_utils import build_tempo_map, ticks_to_ms_with_map
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1348,3 +1351,265 @@ class TestPushFlag:
 
         grid_tick = 4 * self.PPQ
         assert self._kick_abs_tick(out) == grid_tick
+
+
+# ---------------------------------------------------------------------------
+# TestGrooveDrift — AR(1) clock + variance split (unit, no MIDI)
+# ---------------------------------------------------------------------------
+
+class TestGrooveDrift:
+    def test_variance_preserved_across_phi(self):
+        # For a stationary bucket, the sqrt(1-beta)/sqrt(beta) split keeps Var(output)==Var(c).
+        rng = np.random.RandomState(0)
+        c = rng.normal(0.0, 4.0, 40000)
+        for phi in (0.3, 0.5, 0.8):
+            np.random.seed(123)
+            g = GrooveDrift(phi)
+            out = np.array([g.step(x, 4.0) for x in c])
+            assert out.var() == pytest.approx(c.var(), rel=0.06)
+
+    def test_lag1_autocorr_is_one_minus_beta_times_phi(self):
+        # The independent residual dilutes the drift's autocorrelation (phi) by (1-beta).
+        rng = np.random.RandomState(1)
+        c = rng.normal(0.0, 4.0, 60000)
+        for phi in (0.3, 0.5, 0.8):
+            np.random.seed(7)
+            g = GrooveDrift(phi)
+            out = np.array([g.step(x, 4.0) for x in c])
+            ac = float(np.corrcoef(out[:-1], out[1:])[0, 1])
+            assert ac == pytest.approx((1.0 - RESIDUAL_SHARE) * phi, abs=0.03)
+
+    def test_ar_recursion_exact_with_zero_sigma(self):
+        # sigma=0 removes residual randomness → deterministic; verify the AR recursion and
+        # the sqrt(1-beta) drift weight exactly (fails for a wrong constant).
+        phi = 0.5
+        g = GrooveDrift(phi)
+        innov = math.sqrt(1 - phi**2)
+        wd = math.sqrt(1 - RESIDUAL_SHARE)
+        d = 0.0
+        for c in (10.0, -4.0, 7.0, 0.0):
+            d = phi * d + innov * c
+            assert g.step(c, 0.0) == pytest.approx(wd * d)
+
+    def test_autocorr_zero_at_tiny_phi(self):
+        rng = np.random.RandomState(2)
+        c = rng.normal(0.0, 4.0, 40000)
+        np.random.seed(3)
+        g = GrooveDrift(1e-9)
+        out = np.array([g.step(x, 4.0) for x in c])
+        assert abs(float(np.corrcoef(out[:-1], out[1:])[0, 1])) < 0.03
+
+    def test_drift_starts_at_zero(self):
+        assert GrooveDrift(0.5).drift == 0.0
+
+
+# ---------------------------------------------------------------------------
+# TestCoupling — phi=0 independence vs phi>0 shared-nudge (incl. --push)
+# ---------------------------------------------------------------------------
+
+class TestCoupling:
+    PPQ = 480
+    TEMPO_US = 500_000  # 120 BPM → 1 tick ≈ 1.0417 ms
+
+    def _chord_midi(self, tmp_path):
+        # kick(36) then snare(38) on the SAME tick at bar 2 beat 1 (isolated, wide window).
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        G = 4 * self.PPQ
+        tr.append(mido.Message("note_on",  channel=9, note=36, velocity=100, time=G))
+        tr.append(mido.Message("note_on",  channel=9, note=38, velocity=100, time=0))
+        # long notes (240 ticks) so the +10/+40 ms late shifts aren't clamped by note_off
+        tr.append(mido.Message("note_off", channel=9, note=36, velocity=0, time=240))
+        tr.append(mido.Message("note_off", channel=9, note=38, velocity=0, time=0))
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "chord.mid"; mid.save(str(p))
+        return p
+
+    def _note_ticks(self, path):
+        mid = mido.MidiFile(str(path)); t = 0; out = {}
+        for msg in mid.tracks[0]:
+            t += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                out.setdefault(msg.note, []).append(t)
+        return out
+
+    def _gap_ms(self, path):
+        mid = mido.MidiFile(str(path))
+        tmap = build_tempo_map(mid)
+        ticks = self._note_ticks(path)
+        lo, hi = sorted((ticks[36][0], ticks[38][0]))
+        return ticks_to_ms_with_map(lo, hi, tmap, self.PPQ)
+
+    def _ms_per_tick(self):
+        return self.TEMPO_US / self.PPQ / 1000.0
+
+    # kick +10 ms, snare +40 ms (constant single-value buckets)
+    def _profile_meanless(self):
+        return LoadedProfile(
+            buckets={
+                "rock|beat|kick":  BucketProfile(np.array([10.0]), np.array([0.0]), None),
+                "rock|beat|snare": BucketProfile(np.array([40.0]), np.array([0.0]), None),
+            },
+            velocity_thresholds={},
+        )
+
+    def _profile_with_means(self):
+        p = self._profile_meanless()
+        return LoadedProfile(
+            buckets=p.buckets, velocity_thresholds={},
+            bucket_offset_means={"rock|beat|kick": 10.0, "rock|beat|snare": 40.0},
+        )
+
+    def test_phi0_leaves_chord_members_independent(self, tmp_path):
+        # Coupling OFF at phi=0: each lands at its OWN offset → clearly separated (~30 ms).
+        inp = self._chord_midi(tmp_path); out = tmp_path / "o.mid"
+        humanise(inp, out, self._profile_meanless(), seed=0, phi=0.0)
+        assert self._gap_ms(out) == pytest.approx(30.0, abs=3.0)
+
+    def test_coupled_hits_tight_phi_gt_0(self, tmp_path):
+        inp = self._chord_midi(tmp_path); out = tmp_path / "o.mid"
+        humanise(inp, out, self._profile_meanless(), seed=0, phi=0.5)
+        assert self._gap_ms(out) <= 2 * COUPLED_RESIDUAL_MS + self._ms_per_tick()
+
+    def test_coupled_hits_tight_under_push_with_differing_means(self, tmp_path):
+        # Shared lean: kick mean=10, snare mean=40 differ, but under --push they still land
+        # together (would separate by ~30 ms if each re-added its own lean).
+        inp = self._chord_midi(tmp_path); out = tmp_path / "o.mid"
+        humanise(inp, out, self._profile_with_means(), seed=0, phi=0.5, push=True)
+        assert self._gap_ms(out) <= 2 * COUPLED_RESIDUAL_MS + self._ms_per_tick()
+
+    def test_coupled_stays_tight_with_interspersed_fixed_note(self, tmp_path):
+        # Regression: a non-shiftable note at the SAME tick BETWEEN chord members used to make
+        # the coupled member reuse the anchor's pre-clamp desired offset and fly ~40 ms late
+        # once the anchor was window-clamped by the fixed note. It must now track the anchor's
+        # actual landing and stay tight (within a tick or two).
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        G = 4 * self.PPQ
+        tr.append(mido.Message("note_on",  channel=9, note=36, velocity=100, time=G))  # kick (anchor)
+        tr.append(mido.Message("note_on",  channel=0, note=60, velocity=100, time=0))  # unshiftable, same tick
+        tr.append(mido.Message("note_on",  channel=9, note=38, velocity=100, time=0))  # snare (coupled)
+        tr.append(mido.Message("note_off", channel=9, note=36, velocity=0, time=240))
+        tr.append(mido.Message("note_off", channel=0, note=60, velocity=0, time=0))
+        tr.append(mido.Message("note_off", channel=9, note=38, velocity=0, time=0))
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "chord_fixed.mid"; mid.save(str(inp))
+        out = tmp_path / "o.mid"
+        # kick & snare both want +40 ms late; the fixed note at G clamps the anchor to G-1.
+        prof = LoadedProfile(
+            buckets={
+                "rock|beat|kick":  BucketProfile(np.array([40.0]), np.array([0.0]), None),
+                "rock|beat|snare": BucketProfile(np.array([40.0]), np.array([0.0]), None),
+            },
+            velocity_thresholds={},
+        )
+        humanise(inp, out, prof, seed=0, phi=0.5, intensity=1.0)
+        ticks = self._note_ticks(out)
+        assert abs(ticks[36][0] - ticks[38][0]) <= 2   # tight (was ~38 ticks before the fix)
+
+
+# ---------------------------------------------------------------------------
+# TestLegacyProfileNoAmplification + velocity-only clock, phi validation
+# ---------------------------------------------------------------------------
+
+class TestGrooveDriftInteractions:
+    PPQ = 480
+    TEMPO_US = 500_000
+
+    def _kick_line(self, tmp_path, n, step_ticks, dur=200):
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        prev = 0; origs = []
+        for i in range(n):
+            t = i * step_ticks
+            tr.append(mido.Message("note_on",  channel=9, note=36, velocity=90, time=t - prev)); prev = t
+            # note long enough that late timing shifts fit within the note (no note_off clamp)
+            tr.append(mido.Message("note_off", channel=9, note=36, velocity=0, time=dur)); prev = t + dur
+            origs.append(t)
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "kicks.mid"; mid.save(str(p))
+        return p, origs
+
+    def test_meanless_profile_lean_not_amplified(self, tmp_path):
+        # Legacy/meanless profile: offsets mean +30 ms with spread; the systematic lean must
+        # be preserved (~30 ms), NOT amplified to sqrt(1-phi^2)/(1-phi)*30 ≈ 52 ms.
+        prof = LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(np.array([20.0, 40.0]),
+                                                     np.array([0.0, 0.0]), None)},
+            velocity_thresholds={},
+        )
+        inp, _ = self._kick_line(tmp_path, n=48, step_ticks=self.PPQ)
+        out = tmp_path / "o.mid"
+        humanise(inp, out, prof, seed=0, phi=0.5)
+        mid = mido.MidiFile(str(out)); tmap = build_tempo_map(mid)
+        offs = []; t = 0
+        for msg in mid.tracks[0]:
+            t += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                grid = (t // self.PPQ) * self.PPQ
+                offs.append(ticks_to_ms_with_map(grid, t, tmap, self.PPQ))
+        avg = float(np.mean(offs))
+        assert avg == pytest.approx(30.0, abs=8.0)
+        assert avg < 45.0   # firmly below the amplified ~52 ms
+
+    def test_velocity_only_never_advances_clock(self, tmp_path):
+        # velocity_only bypasses timing entirely — positions untouched even at high phi.
+        prof = LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(np.array([20.0, -20.0, 5.0]),
+                                                     np.array([10.0, -10.0, 0.0]), None)},
+            velocity_thresholds={},
+        )
+        inp, origs = self._kick_line(tmp_path, n=8, step_ticks=240)
+        out = tmp_path / "o.mid"
+        humanise(inp, out, prof, seed=0, phi=0.9, velocity_only=True)
+        res = mido.MidiFile(str(out)); t = 0; got = []
+        for msg in res.tracks[0]:
+            t += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                got.append(t)
+        assert got == origs
+
+    def test_sample_stream_independent_of_phi(self, tmp_path):
+        # The residual RNG is separate from the global sample stream, so changing phi must
+        # NOT change the drawn offset/velocity samples — only the timing *processing*. This
+        # keeps a phi A/B a clean timing-only comparison.
+        prof = LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(
+                np.array([20.0, -15.0, 8.0, -3.0, 12.0]),
+                np.array([10.0, -8.0, 4.0, -2.0, 6.0]), None)},
+            velocity_thresholds={},
+        )
+        inp, _ = self._kick_line(tmp_path, n=16, step_ticks=self.PPQ)
+        a, b = tmp_path / "a.mid", tmp_path / "b.mid"
+        humanise(inp, a, prof, seed=5, phi=0.0)
+        humanise(inp, b, prof, seed=5, phi=0.5)
+
+        def vels(p):
+            m = mido.MidiFile(str(p))
+            return [msg.velocity for msg in m.tracks[0]
+                    if msg.type == "note_on" and msg.velocity > 0]
+
+        def ticks(p):
+            m = mido.MidiFile(str(p)); t = 0; out = []
+            for msg in m.tracks[0]:
+                t += msg.time
+                if msg.type == "note_on" and msg.velocity > 0:
+                    out.append(t)
+            return out
+
+        assert vels(a) == vels(b)      # velocities identical across phi
+        assert ticks(a) != ticks(b)    # timing differs → drift is actually engaged
+
+    @pytest.mark.parametrize("bad_phi", [1.0, 1.5, -0.1])
+    def test_phi_out_of_range_raises(self, tmp_path, bad_phi):
+        mid = _make_midi([
+            mido.Message("note_on",  channel=9, note=36, velocity=80, time=0),
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+        inp = _save_load(mid, tmp_path); out = tmp_path / "o.mid"
+        profs = load_profile(_write_profile(tmp_path, _profile_dict()))
+        with pytest.raises(ValueError, match="phi"):
+            humanise(inp, out, profs, phi=bad_phi)

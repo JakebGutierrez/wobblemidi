@@ -38,6 +38,7 @@ pocketmidi drums.mid drums_humanised.mid --intensity 0.3
 | `--section` | `beat` | Pass `fill` for fill passages — uses a separate timing distribution. |
 | `--genre` | `rock` | Profile to use. Only `rock` is included in v1. |
 | `--seed` | none | Integer seed for reproducible output. |
+| `--groove-tightness` | `0.5` | 0.0–<1.0. How much the kit shares one drifting internal clock. `0` = every hit timed independently (twitchy); higher values make hits wander together as a pocket, and land simultaneously-notated hits (kick+snare) together. The overall amount of timing spread stays roughly the same — the knob mainly changes its *character* (how correlated hits are). |
 | `--timing-only` | off | Apply timing humanisation only; leave velocities unchanged. |
 | `--velocity-only` | off | Apply velocity humanisation only; leave timing unchanged. |
 | `--push` | off | Include the directional timing tendencies of the source drummers. Without this flag, timing variation is centred on the grid — natural human imprecision without systematic push or drag. Use `--push` if you want a specific "leaning into the beat" feel that matches the original recordings. |
@@ -52,6 +53,8 @@ pocketmidi builds a statistical profile from the [Groove MIDI Dataset](https://m
 When humanising, each note is snapped to the nearest 16th-note grid position, then a timing offset and velocity delta are sampled from the matching distribution and applied. The result is timing variation that reflects how an actual drummer plays, not a random number generator.
 
 **Timing is centred on the grid by default.** The raw GMD data contains directional tendencies (some drummers consistently push certain beats ahead of the grid). Without `--push`, these are removed — you get the spread and feel of real drumming without inheriting a specific drummer's rushing or dragging habit.
+
+**One clock for the kit (`--groove-tightness`).** Sampling every hit's timing independently sounds twitchy — real drummers have a single internal clock that drifts slowly. pocketmidi keeps one running timing drift per track: each hit nudges it, and the hit is placed by that shared drift plus a small independent wiggle, so the kit breathes together instead of scattering. The overall amount of timing variation stays about the same at any setting; the knob mainly changes how correlated it is. Hits notated on the same tick share one nudge, so kit-wide accents stay tight instead of flamming.
 
 ## MIDI compatibility
 

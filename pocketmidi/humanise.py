@@ -217,10 +217,55 @@ def _sample_bucket(bucket: BucketProfile) -> tuple[float, float]:
     """
     if bucket.kde is not None:
         sample = bucket.kde.resample(1)   # shape (2, 1); uses numpy RNG state
-        return float(sample[0, 0]), float(sample[1, 0])
+        # KDE resampling adds ~one bandwidth of Gaussian noise, so a draw can land
+        # outside the 2nd–98th-percentile range the profile was clipped to at build
+        # time — reintroducing exactly the tail outliers clipping removed. Clamp back
+        # to the retained data range (already in memory) to restore that intent.
+        offset = float(np.clip(sample[0, 0], bucket.offsets.min(), bucket.offsets.max()))
+        vel_delta = float(np.clip(sample[1, 0], bucket.vel_deltas.min(), bucket.vel_deltas.max()))
+        return offset, vel_delta
     else:
         idx = np.random.randint(len(bucket.offsets))
         return float(bucket.offsets[idx]), float(bucket.vel_deltas[idx])
+
+
+# Groove-drift tuning. Fixed internal constants — phi ("groove tightness") is the only
+# user-facing knob; calibrating these from data is a deferred step.
+RESIDUAL_SHARE = 0.15          # β: the residual's share of a solo hit's timing variance
+COUPLED_RESIDUAL_FRAC = 0.15   # coupled-hit scatter as a fraction of its own centred sample …
+COUPLED_RESIDUAL_MS = 1.0      # … capped so each coupled member stays within ±1 ms of the shared nudge
+
+
+class GrooveDrift:
+    """One drummer's internal clock for a single track.
+
+    A shifted *solo* hit advances an AR(1) drift and adds a small independent residual, so the
+    kit's timing wanders together (correlated) instead of scattering hit-to-hit while the
+    per-hit spread is preserved: for a stationary bucket ``Var(step()) == Var(c)``. Constructed
+    and used only when ``phi > 0`` — ``phi == 0`` is an exact bypass in ``humanise()`` (no drift,
+    no coupling), so this class never has to reproduce the legacy path.
+    """
+
+    def __init__(self, phi: float, rng: Any = None) -> None:
+        self.phi = phi
+        self._innov = math.sqrt(1.0 - phi * phi)          # AR(1) scale → stationary Var(drift)==Var(c)
+        self._w_drift = math.sqrt(1.0 - RESIDUAL_SHARE)   # variance split weights (drift vs residual)
+        self._w_resid = math.sqrt(RESIDUAL_SHARE)
+        # Residual noise source. A dedicated RNG (not the global np.random used by
+        # _sample_bucket) keeps the offset/velocity sample stream independent of phi, so
+        # phi=0 and phi>0 draw the *same* samples and differ only in timing processing.
+        self._rng = rng if rng is not None else np.random
+        self.drift = 0.0
+
+    def step(self, c: float, sigma: float) -> float:
+        """Advance the clock by one solo hit and return its timing fluctuation (ms).
+
+        ``c`` is the hit's mean-centred offset sample; ``sigma`` scales the fresh independent
+        residual to the bucket's own spread so the split keeps ``Var(output) == Var(c)`` for a
+        stationary (single-bucket) input — on a real mixed-instrument stream it is approximate.
+        """
+        self.drift = self.phi * self.drift + self._innov * c
+        return self._w_drift * self.drift + self._w_resid * float(self._rng.normal(0.0, sigma))
 
 
 def humanise(
@@ -235,10 +280,17 @@ def humanise(
     timing_only: bool = False,
     velocity_only: bool = False,
     push: bool = False,
+    phi: float = 0.5,
 ) -> None:
     if timing_only and velocity_only:
         raise ValueError("timing_only and velocity_only are mutually exclusive")
+    if not (0.0 <= phi < 1.0):
+        raise ValueError("phi (groove tightness) must be in [0.0, 1.0)")
     np.random.seed(seed)
+    # Groove-residual RNG, seeded independently of (but reproducibly from) `seed` so it never
+    # perturbs the global sample stream — offset/velocity draws stay identical across phi.
+    resid_seed = None if seed is None else (seed + 2_246_822_519) % (2 ** 32)
+    resid_rng = np.random.RandomState(resid_seed)
 
     mid = mido.MidiFile(str(input_path))
     if mid.type == 2:
@@ -319,6 +371,15 @@ def humanise(
         out_abs: list[tuple[int, mido.Message]] = []
         prev_note_on_abs = -EPSILON_TICKS
         prev_emitted_abs = 0
+        # Original (pre-shift) tick of the most recent emitted note_on. Used to
+        # detect chords: two note_ons notated at the same tick are simultaneous
+        # hits and must be allowed to stay on the same tick, rather than being
+        # force-separated by EPSILON_TICKS (which flams every kit-wide accent).
+        prev_note_on_orig_abs = -EPSILON_TICKS
+        # Groove-drift state: one internal clock per track. None at phi==0 (exact bypass).
+        groove = GrooveDrift(phi, resid_rng) if phi != 0.0 else None
+        chord_tick: int | None = None   # original tick of the current chord's anchor solo hit
+        chord_anchor_abs = 0            # that anchor's ACTUAL emitted tick; coupled members land near it
 
         for idx, (abs_t, msg) in enumerate(abs_messages):
             if will_shift[idx]:
@@ -333,23 +394,56 @@ def humanise(
                     new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
                     out_abs.append((abs_t, msg.copy(velocity=new_vel)))
                     prev_note_on_abs = abs_t
+                    prev_note_on_orig_abs = abs_t
                     prev_emitted_abs = abs_t
                     if verbose:
                         print(f"  note {msg.note} ({group}): level {level}")
                     continue
 
-                offset_ms = offset_ms_raw
-                if not push:
-                    offset_ms -= profiles.bucket_offset_means.get(key_used, 0.0)
-                candidate = grid_tick + _ms_offset_to_ticks(
-                    grid_tick, offset_ms * intensity, tempo_map, ppq
-                )
+                mu_debias = profiles.bucket_offset_means.get(key_used, 0.0)
+                is_chord_anchor = False
+                if phi == 0.0:
+                    # Exact pre-drift behaviour: drift and coupling both inert.
+                    offset_ms = offset_ms_raw - (0.0 if push else mu_debias)
+                    candidate = grid_tick + _ms_offset_to_ticks(
+                        grid_tick, offset_ms * intensity, tempo_map, ppq
+                    )
+                elif abs_t == chord_tick:
+                    # Coupled member (same original tick as the anchor solo hit): land at the
+                    # anchor's ACTUAL emitted tick plus a tiny ±COUPLED_RESIDUAL_MS residual — NOT
+                    # its pre-clamp desired offset — then let the window clamp to this member's own
+                    # legal range. Targeting the real landing keeps the chord tight even when the
+                    # anchor was window-clamped or a fixed same-tick event sits between members.
+                    # Does NOT advance the clock.
+                    c = offset_ms_raw - float(bucket.offsets.mean())
+                    residual_ms = max(-COUPLED_RESIDUAL_MS,
+                                      min(COUPLED_RESIDUAL_MS, COUPLED_RESIDUAL_FRAC * c))
+                    candidate = chord_anchor_abs + _ms_offset_to_ticks(
+                        chord_anchor_abs, residual_ms * intensity, tempo_map, ppq
+                    )
+                else:
+                    # Solo hit / chord anchor: centre on the bucket's own mean (so a legacy/meanless
+                    # profile's lean is never amplified), advance the clock + independent residual,
+                    # then re-apply the systematic lean per the push contract.
+                    mu_center = float(bucket.offsets.mean())
+                    fluct = groove.step(offset_ms_raw - mu_center, float(bucket.offsets.std()))
+                    offset_ms = fluct + (mu_center - (0.0 if push else mu_debias))
+                    candidate = grid_tick + _ms_offset_to_ticks(
+                        grid_tick, offset_ms * intensity, tempo_map, ppq
+                    )
+                    chord_tick = abs_t
+                    is_chord_anchor = True
                 if timing_only:
                     new_vel = msg.velocity
                 else:
                     new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
 
-                lower = max(prev_emitted_abs, prev_note_on_abs + EPSILON_TICKS)
+                if abs_t == prev_note_on_orig_abs:
+                    # Chord member (same original tick as the previous note_on):
+                    # allow it to share prev_emitted_abs so the hit stays tight.
+                    lower = prev_emitted_abs
+                else:
+                    lower = max(prev_emitted_abs, prev_note_on_abs + EPSILON_TICKS)
                 upper_exclusive = min(
                     paired_note_off_abs[idx],
                     next_fixed[idx + 1] if idx + 1 < N else math.inf,
@@ -365,7 +459,12 @@ def humanise(
 
                 out_abs.append((new_abs, msg.copy(velocity=new_vel)))
                 prev_note_on_abs = new_abs
+                prev_note_on_orig_abs = abs_t
                 prev_emitted_abs = new_abs
+                if is_chord_anchor:
+                    # Record the anchor's real landing so coupled members track it, not the
+                    # pre-clamp desired offset.
+                    chord_anchor_abs = new_abs
                 if verbose:
                     print(f"  note {msg.note} ({group}): level {level}")
 
@@ -373,6 +472,7 @@ def humanise(
                 out_abs.append((abs_t, msg))
                 if msg.type == "note_on" and msg.velocity > 0:
                     prev_note_on_abs = abs_t
+                    prev_note_on_orig_abs = abs_t
                 prev_emitted_abs = abs_t
 
         # Convert abs ticks back to delta times

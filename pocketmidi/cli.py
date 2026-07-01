@@ -27,7 +27,12 @@ from pocketmidi.humanise import load_profile, humanise
 @click.option("--push",          is_flag=True,
               help="Include directional timing tendencies from source recordings. "
                    "Without this flag, timing variation is centred on the grid.")
-def main(input_path, output_path, genre, intensity, section, seed, verbose, timing_only, velocity_only, push):
+@click.option("--groove-tightness", default=0.5, show_default=True,
+              type=click.FloatRange(0.0, 1.0, max_open=True),
+              help="Groove tightness 0.0-<1.0. 0 = every hit timed independently (old "
+                   "behaviour); higher = hits share one drifting internal clock, moving "
+                   "together as a pocket instead of scattering hit-to-hit.")
+def main(input_path, output_path, genre, intensity, section, seed, verbose, timing_only, velocity_only, push, groove_tightness):
     """Humanise programmed drum MIDI using real drummer performance data."""
     if timing_only and velocity_only:
         click.echo("Error: --timing-only and --velocity-only are mutually exclusive.", err=True)
@@ -53,6 +58,7 @@ def main(input_path, output_path, genre, intensity, section, seed, verbose, timi
             timing_only=timing_only,
             velocity_only=velocity_only,
             push=push,
+            phi=groove_tightness,
         )
     except ValueError as exc:
         click.echo(f"Error: {exc}", err=True)

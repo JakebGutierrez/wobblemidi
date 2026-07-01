@@ -35,6 +35,7 @@ All tests must pass before moving to the next module.
 | 9 | Grid position awareness | done |
 | 10 | Outlier clipping | done |
 | 11 | 6/8 support | done |
+| 12 | Groove drift + coupled hits (`--groove-tightness`) | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -301,3 +302,48 @@ Key implementation decisions:
   (backward compatible, behaviour is push=True equivalent on old profiles).
 - `_build_pairs` and `_sample_bucket` are unchanged.
 - Requires profile rebuild to populate `bucket_offset_means` in `_meta`.
+
+## Implementation notes — module 12: groove drift + coupled hits
+
+Replaces independent per-hit timing with **one AR(1) drift clock per track** plus **coupled
+(same-tick) hits**. User-facing knob: `--groove-tightness` (phi, default 0.5). No profile
+rebuild — reuses the existing `rock.json`.
+
+**`GrooveDrift` class in `humanise.py`.** A shifted *solo* hit does
+`drift = phi*drift + sqrt(1-phi**2)*c` (AR(1) on the mean-centred sample `c`), then
+`fluct = sqrt(1-RESIDUAL_SHARE)*drift + sqrt(RESIDUAL_SHARE)*residual`. This is a genuine
+variance split (`Var(fluct) == Var(c)` for a stationary bucket), not the AR innovation
+relabelled — the task asked for "drift **plus** a small independent residual". Constants
+`RESIDUAL_SHARE = 0.15`, `COUPLED_RESIDUAL_FRAC = 0.15`, `COUPLED_RESIDUAL_MS = 1.0` are fixed
+internal tunings; only phi is exposed. Calibrating phi from GMD is deferred.
+
+Key design decisions (all from three plan reviews — do not undo without re-checking):
+- **`phi == 0.0` is an exact bypass** in `humanise()`: `offset_ms = offset_ms_raw - (0.0 if
+  push else mu_debias)` — byte-identical to the pre-module-12 path (no-push) / output-identical
+  (push), with drift **and** coupling inert. This is the "phi=0 reproduces today" contract and
+  is what makes coupling phi-gated. Keep this branch literally equal to the old arithmetic.
+- **Clock is centred on the bucket's own sample mean** (`mu_center = bucket.offsets.mean()`),
+  not on `bucket_offset_means`. This zero-means `c` even for legacy/meanless profiles, so their
+  systematic lean is **never amplified** by `sqrt(1-phi**2)/(1-phi)`; the lean is re-applied
+  statically via `mu_center - (0.0 if push else mu_debias)`. Preserves the documented
+  "old profile = push-equivalent" behaviour with no profile/doc change.
+- **Residual RNG is separate** (`resid_rng`, a `RandomState` seeded reproducibly from `seed`,
+  NOT the global `np.random`). So the offset/velocity **sample** stream is identical across phi
+  — a phi A/B is a clean timing-only comparison, and phi=0 vs phi>0 draw the same samples.
+  Do not route the residual through the global stream.
+- **Coupled hits (`abs_t == chord_tick`)** land at the anchor solo hit's **actual emitted tick**
+  (`chord_anchor_abs`, captured *after* window-clamping) plus a `±COUPLED_RESIDUAL_MS`-capped
+  residual, and do **not** advance the clock. Targeting the real landing (not the anchor's
+  pre-clamp desired offset) keeps the chord tight even when the anchor is window-clamped or a
+  fixed same-tick event sits between members — otherwise a coupled member could fly ~40 ms late
+  (regression: `test_coupled_stays_tight_with_interspersed_fixed_note`). The static lean is
+  inside the anchor's landing, so coupling stays tight under `--push` too. `chord_tick` is set
+  only by a real shiftable solo hit (guards against false coupling). Separate from the patch's
+  `prev_note_on_orig_abs` windowing chord logic, which stays and applies at all phi.
+- `velocity_only` `continue`s before the timing block → clock never advances.
+
+**Output autocorrelation is `(1 - RESIDUAL_SHARE) * phi`**, not phi (the independent residual
+dilutes the drift's phi-autocorrelation). Tests assert this exact value.
+
+**Demo:** `scripts/make_demo.py` writes `demo/rock_4bar_{input,phi0,phi05}.mid` — same seed,
+phi 0.0 vs 0.5, for A/B listening in a DAW.
