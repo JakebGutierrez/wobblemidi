@@ -253,3 +253,39 @@ class TestFlags:
 
         _, kwargs = mock_h.call_args
         assert kwargs["push"] is False
+
+    def test_groove_tightness_passed_through(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path), "--groove-tightness", "0.7"])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["phi"] == pytest.approx(0.7)
+
+    def test_groove_tightness_default_is_half(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path)])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["phi"] == pytest.approx(0.5)
+
+    @pytest.mark.parametrize("bad", ["1.0", "-0.1"])
+    def test_groove_tightness_out_of_range(self, tmp_path, bad):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        result = runner.invoke(main, [str(in_path), str(out_path), "--groove-tightness", bad])
+
+        assert result.exit_code != 0
