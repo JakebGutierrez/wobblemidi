@@ -130,24 +130,16 @@ def _build_profiles(
     return profiles, bucket_offset_means, written, skipped
 
 
-@click.command()
-@click.argument("gmd_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-def main(gmd_dir: Path) -> None:
-    """Ingest GMD rock files and write timing/velocity profiles to pocketmidi/profiles/rock.json."""
-    # ------------------------------------------------------------------
-    # 1. Load metadata and filter to rock files only
-    # ------------------------------------------------------------------
-    info = pd.read_csv(gmd_dir / "info.csv")
-    rock = info[info["style"].str.startswith("rock")]
-    click.echo(f"Rock files: {len(rock)}")
+def collect_hits(gmd_dir: Path, files: pd.DataFrame) -> tuple[list[dict], int]:
+    """Collect raw hits from the GMD takes listed in *files* (rows of info.csv).
 
-    # ------------------------------------------------------------------
-    # 2. Collect raw hits from every rock MIDI file
-    # ------------------------------------------------------------------
+    Returns (raw_hits, skipped_files). Missing, unreadable, and non-4/4 files
+    are silently skipped with a counter.
+    """
     raw_hits: list[dict] = []
     skipped_files = 0
 
-    for row in rock.itertuples():
+    for row in files.itertuples():
         midi_path = gmd_dir / row.midi_filename
         if not midi_path.exists():
             skipped_files += 1
@@ -203,11 +195,18 @@ def main(gmd_dir: Path) -> None:
                     }
                 )
 
-    click.echo(f"Total raw hits collected: {len(raw_hits)}  (files skipped: {skipped_files})")
+    return raw_hits, skipped_files
 
+
+def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
+    """Compute thresholds, group hits into buckets, clip, and assemble the profile dict.
+
+    Returns (output, written, skipped_buckets) where *output* is the JSON-ready
+    profile dict including the ``_meta`` block.
+    """
     # ------------------------------------------------------------------
-    # 3. Compute velocity tertile thresholds for kick and snare
-    #    (from post-filter raw_hits so boundaries match the retained data)
+    # Compute velocity tertile thresholds for kick and snare
+    # (from post-filter raw_hits so boundaries match the retained data)
     # ------------------------------------------------------------------
     all_by_instrument: dict[str, list[float]] = defaultdict(list)
     for h in raw_hits:
@@ -221,7 +220,7 @@ def main(gmd_dir: Path) -> None:
         click.echo(f"  {instr} velocity tertiles: soft<{low:.1f}, medium<{high:.1f}, hard>={high:.1f}")
 
     # ------------------------------------------------------------------
-    # 4a. Per-style buckets
+    # Per-style buckets
     #     - stratified (kick/snare only): rock|{beat_type}|{instrument}|{tier}
     #     - unstratified (all instruments): rock|{beat_type}|{instrument}
     # ------------------------------------------------------------------
@@ -239,7 +238,7 @@ def main(gmd_dir: Path) -> None:
             tier = _velocity_tier(h["velocity"], thresholds)
             tier_buckets[(h["beat_type"], h["instrument_group"], tier)].append(h)
 
-    # 4b. Grid-position-aware buckets (all instruments)
+    # Grid-position-aware buckets (all instruments)
     grid_style_buckets: dict[tuple[str, str, int], list[dict]] = defaultdict(list)
     grid_tier_buckets: dict[tuple[str, str, str, int], list[dict]] = defaultdict(list)
 
@@ -251,20 +250,20 @@ def main(gmd_dir: Path) -> None:
             tier = _velocity_tier(h["velocity"], thresholds)
             grid_tier_buckets[(h["beat_type"], h["instrument_group"], tier, gp)].append(h)
 
-    # 4c. Global buckets: global|{instrument_group}
+    # Global buckets: global|{instrument_group}
     global_buckets: dict[str, list[dict]] = defaultdict(list)
     for h in raw_hits:
         global_buckets[h["instrument_group"]].append(h)
 
     # ------------------------------------------------------------------
-    # 5. Build profiles, clipping offset outliers and enforcing MIN_SAMPLES
+    # Build profiles, clipping offset outliers and enforcing MIN_SAMPLES
     # ------------------------------------------------------------------
     profiles, bucket_offset_means, written, skipped_buckets = _build_profiles(
         grid_tier_buckets, grid_style_buckets, tier_buckets, style_buckets, global_buckets
     )
 
     # ------------------------------------------------------------------
-    # 6. Write JSON (bucket data + _meta)
+    # Assemble JSON-ready dict (bucket data + _meta)
     # ------------------------------------------------------------------
     output: dict = {
         "_meta": {
@@ -277,6 +276,22 @@ def main(gmd_dir: Path) -> None:
         }
     }
     output.update(profiles)
+
+    return output, written, skipped_buckets
+
+
+@click.command()
+@click.argument("gmd_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
+def main(gmd_dir: Path) -> None:
+    """Ingest GMD rock files and write timing/velocity profiles to pocketmidi/profiles/rock.json."""
+    info = pd.read_csv(gmd_dir / "info.csv")
+    rock = info[info["style"].str.startswith("rock")]
+    click.echo(f"Rock files: {len(rock)}")
+
+    raw_hits, skipped_files = collect_hits(gmd_dir, rock)
+    click.echo(f"Total raw hits collected: {len(raw_hits)}  (files skipped: {skipped_files})")
+
+    output, written, skipped_buckets = build_profile_output(raw_hits)
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
     with OUTPUT_FILE.open("w") as f:
