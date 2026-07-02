@@ -267,7 +267,7 @@ class TestFlags:
         _, kwargs = mock_h.call_args
         assert kwargs["phi"] == pytest.approx(0.7)
 
-    def test_groove_tightness_default_is_half(self, tmp_path):
+    def test_groove_tightness_default_is_0_4(self, tmp_path):
         in_path = _minimal_midi(tmp_path)
         out_path = tmp_path / "out.mid"
 
@@ -278,7 +278,33 @@ class TestFlags:
             runner.invoke(main, [str(in_path), str(out_path)])
 
         _, kwargs = mock_h.call_args
-        assert kwargs["phi"] == pytest.approx(0.5)
+        assert kwargs["phi"] == pytest.approx(0.4)
+
+    def test_all_channels_passed_through(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path), "--all-channels"])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["all_channels"] is True
+
+    def test_all_channels_default_false(self, tmp_path):
+        in_path = _minimal_midi(tmp_path)
+        out_path = tmp_path / "out.mid"
+
+        runner = CliRunner()
+        with patch("pocketmidi.cli.as_file", _fake_as_file), \
+             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("pocketmidi.cli.humanise") as mock_h:
+            runner.invoke(main, [str(in_path), str(out_path)])
+
+        _, kwargs = mock_h.call_args
+        assert kwargs["all_channels"] is False
 
     @pytest.mark.parametrize("bad", ["1.0", "-0.1"])
     def test_groove_tightness_out_of_range(self, tmp_path, bad):

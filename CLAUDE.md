@@ -213,9 +213,10 @@ Stratified fallback chain with grid_pos (6 levels):
 
 `grid_pos=None` → offset=0 → levels 1,2,3,4 unchanged (backward compat).
 
-4/4 gate in `humanise()` is conditional: only fires when the loaded profile
-contains grid-pos buckets (detected by `key.split("|")[-1].isdigit()`). Legacy
-profiles without grid-pos keys skip the check and work on any time signature.
+Grid-position lookups only run on 4/4 files (positional buckets assume a 4/4
+bar). Non-4/4 files are accepted and pass `grid_pos=None`, falling back to the
+per-instrument ms deviation buckets — the 4/4 rejection gate was removed in the
+Step 1 engine fixes (see below).
 
 rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
 7 non-4/4 files skipped.
@@ -256,11 +257,9 @@ Default `"16"` is unchanged; all existing callers are unaffected.
 **`humanise()` changes:**
 - Calls `detect_meter(mid)` immediately after the type-2 check; sets `grid = "8"` for
   6/8, `"16"` otherwise.
-- The 4/4 gate now uses `meter != "6/8"` to bypass for 6/8 files — they are accepted
-  even with grid-pos profiles (though grid_pos=None means no positional lookup).
-- Both note-processing loops pass `grid` to `quantise_to_grid` and compute
-  `gp = None if meter == "6/8" else grid_position_in_bar(grid_tick, ppq)`.
-  Passing `grid_pos=None` skips the positional bucket chain entirely and falls back
+- Both note-processing loops pass `grid` to `quantise_to_grid`; positional lookup
+  runs only when `use_grid_pos` (4/4 files) — 6/8 and other non-4/4 meters pass
+  `grid_pos=None`, which skips the positional bucket chain entirely and falls back
   to the per-instrument ms deviation buckets, which transfer well across meters.
 
 **No profile rebuild needed.** The existing rock.json is reused unchanged.
@@ -306,7 +305,7 @@ Key implementation decisions:
 ## Implementation notes — module 12: groove drift + coupled hits
 
 Replaces independent per-hit timing with **one AR(1) drift clock per track** plus **coupled
-(same-tick) hits**. User-facing knob: `--groove-tightness` (phi, default 0.5). No profile
+(same-tick) hits**. User-facing knob: `--groove-tightness` (phi, default 0.4). No profile
 rebuild — reuses the existing `rock.json`.
 
 **`GrooveDrift` class in `humanise.py`.** A shifted *solo* hit does
@@ -347,3 +346,19 @@ dilutes the drift's phi-autocorrelation). Tests assert this exact value.
 
 **Demo:** `scripts/make_demo.py` writes `demo/rock_4bar_{input,phi0,phi05}.mid` — same seed,
 phi 0.0 vs 0.5, for A/B listening in a DAW.
+
+## Implementation notes — Step 1 engine fixes (2026-07)
+
+Safe engine fixes from the roadmap (`pocketmidi_roadmap.md`) — no GMD, no profile rebuild.
+
+- **Drum-channel filter:** `will_shift` requires `msg.channel == DRUM_CHANNEL` (9,
+  i.e. MIDI channel 10) unless `all_channels=True` (`--all-channels` in cli.py).
+  Melodic parts on drum-range note numbers pass through untouched and act as fixed
+  events (windowing bounds), same as any other unshifted note.
+- **Straight non-4/4 meters accepted:** the 4/4 rejection gate is gone. A single
+  `use_grid_pos = meter != "6/8" and is_four_four(mid)` decides positional lookups;
+  non-4/4, non-6/8 files (3/4, 5/4, non-6/8 mixes) get `grid_pos=None` and use the
+  per-instrument buckets — the 6/8 precedent. 6/8-mixed files still raise in
+  `detect_meter()`.
+- **phi default 0.4** (was 0.5) in both `humanise()` and `--groove-tightness`.
+  Data-backed: GMD calibration recommends ~0.374 (`scripts/calibrate_phi.py`).

@@ -863,6 +863,59 @@ class TestHumaniseUnknownNotes:
 
 
 # ---------------------------------------------------------------------------
+# TestDrumChannelFilter
+# ---------------------------------------------------------------------------
+
+class TestDrumChannelFilter:
+    """Only MIDI channel 10 (mido channel 9) is humanised by default.
+
+    Melodic parts often use drum-range note numbers (36 = C2); without the
+    channel filter they got "humanised" and corrupted.
+    """
+
+    # Constant bucket → deterministic: +50 ms ≈ +48 ticks at 120 BPM / PPQ 480,
+    # vel_delta +10.
+    _PROFILE = {"rock|beat|kick": [[50.0, 10.0], [50.0, 10.0], [50.0, 10.0]]}
+    _SHIFT_TICKS = round(50.0 / (DEFAULT_TEMPO_US / DEFAULT_PPQ / 1000.0))  # 48
+
+    def _two_channel_midi(self) -> mido.MidiFile:
+        """Channel-0 melodic note on a drum-range number (36) + channel-9 kick."""
+        return _make_midi([
+            mido.Message("note_on",  channel=0, note=36, velocity=64, time=0),
+            mido.Message("note_off", channel=0, note=36, velocity=0,  time=480),
+            mido.Message("note_on",  channel=9, note=36, velocity=64, time=480),  # abs=960
+            mido.Message("note_off", channel=9, note=36, velocity=0,  time=480),
+        ])
+
+    def _note_ons_by_channel(self, out: mido.MidiFile) -> dict[int, tuple[int, int]]:
+        """Map channel → (abs_tick, velocity) of its first note_on."""
+        result = {}
+        for t, m in _collect_abs(out):
+            if m.type == "note_on" and m.velocity > 0 and m.channel not in result:
+                result[m.channel] = (t, m.velocity)
+        return result
+
+    def test_non_drum_channel_note_untouched_by_default(self, tmp_path):
+        out = _run_humanise(self._two_channel_midi(), self._PROFILE, tmp_path, seed=0)
+        ons = self._note_ons_by_channel(out)
+        assert ons[0] == (0, 64), "channel-0 drum-range note must pass through untouched"
+        assert ons[9] == (960 + self._SHIFT_TICKS, 74), "channel-9 kick must be humanised"
+
+    def test_all_channels_reenables_other_channels(self, tmp_path):
+        out = _run_humanise(self._two_channel_midi(), self._PROFILE, tmp_path,
+                            seed=0, all_channels=True)
+        ons = self._note_ons_by_channel(out)
+        assert ons[0] == (0 + self._SHIFT_TICKS, 74), "channel-0 note must shift with all_channels"
+        assert ons[9] == (960 + self._SHIFT_TICKS, 74)
+
+    def test_defaults(self):
+        import inspect
+        params = inspect.signature(humanise).parameters
+        assert params["all_channels"].default is False
+        assert params["phi"].default == 0.4  # roadmap: phi default 0.5 → 0.4
+
+
+# ---------------------------------------------------------------------------
 # TestHumaniseIntensityZero
 # ---------------------------------------------------------------------------
 
@@ -1087,10 +1140,10 @@ class TestLookupGridPos:
 
 
 # ---------------------------------------------------------------------------
-# TestHumaniseRejectsNonFourFour
+# TestHumaniseMeterHandling
 # ---------------------------------------------------------------------------
 
-class TestHumaniseRejectsNonFourFour:
+class TestHumaniseMeterHandling:
     def _midi_with_time_sig(self, numerator: int, denominator: int) -> mido.MidiFile:
         mid = mido.MidiFile(type=0, ticks_per_beat=DEFAULT_PPQ)
         track = mido.MidiTrack()
@@ -1120,14 +1173,62 @@ class TestHumaniseRejectsNonFourFour:
         """Profile with no grid-position buckets — 4/4 check must not fire."""
         return LoadedProfile(buckets={}, velocity_thresholds={})
 
-    def test_three_four_raises_with_grid_pos_profile(self, tmp_path):
-        # non-4/4 file + profile that has grid-pos buckets → ValueError
+    def test_three_four_accepted_with_grid_pos_profile(self, tmp_path):
+        # Step 1 fix: a straight non-4/4 file must be ACCEPTED even when the profile
+        # has grid-pos buckets — grid_pos=None routes to the non-positional fallback
+        # (the 6/8 precedent). Constant +50ms fallback bucket → deterministic shift.
         mid = self._midi_with_time_sig(3, 4)
         inp = tmp_path / "in.mid"
         out = tmp_path / "out.mid"
         mid.save(str(inp))
-        with pytest.raises(ValueError, match="4/4"):
-            humanise(inp, out, self._grid_pos_profile())
+        profile = LoadedProfile(
+            buckets={
+                "rock|beat|kick|hard|3": _make_bucket((0.0, 0.0), (1.0, 1.0), (-1.0, -1.0)),
+                "rock|beat|kick":        _make_bucket((50.0, 0.0), (50.0, 0.0), (50.0, 0.0)),
+            },
+            velocity_thresholds={},
+        )
+        humanise(inp, out, profile, seed=0)  # must not raise
+        result = mido.MidiFile(str(out))
+        for track in result.tracks:
+            for msg in track:
+                assert msg.time >= 0
+        events = _collect_abs(result)
+        note_on_abs = next(t for t, m in events if m.type == "note_on" and m.velocity > 0)
+        # +50 ms at 120 BPM (500_000 µs/beat, PPQ 480) → round(50 / 1.0417) = 48 ticks
+        expected = round(50.0 / (DEFAULT_TEMPO_US / DEFAULT_PPQ / 1000.0))
+        assert note_on_abs == expected, (
+            f"expected the non-positional fallback shift (+{expected} ticks), got {note_on_abs}"
+        )
+
+    def test_three_four_gridpos_only_profile_passes_through(self, tmp_path):
+        # Grid-pos-ONLY profile + 3/4 file: grid_pos=None finds no bucket at any level
+        # → note passes through untouched (no raise, no corruption).
+        mid = self._midi_with_time_sig(3, 4)
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._grid_pos_profile())  # must not raise
+        result = mido.MidiFile(str(out))
+        events = _collect_abs(result)
+        note_on_abs, note_on_msg = next(
+            (t, m) for t, m in events if m.type == "note_on" and m.velocity > 0
+        )
+        assert note_on_abs == 0
+        assert note_on_msg.velocity == 80
+
+    def test_mixed_non_six_eight_meters_accepted(self, tmp_path):
+        # 4/4 followed by 3/4 (non-6/8 mix) → accepted with grid_pos=None; previously
+        # raised when the profile had grid-pos buckets.
+        mid = self._midi_with_time_sig(4, 4)
+        mid.tracks[0].insert(2, mido.MetaMessage(
+            "time_signature", numerator=3, denominator=4,
+            clocks_per_click=24, notated_32nd_notes_per_beat=8, time=0,
+        ))
+        inp = tmp_path / "in.mid"
+        out = tmp_path / "out.mid"
+        mid.save(str(inp))
+        humanise(inp, out, self._grid_pos_profile())  # must not raise
 
     # --- helpers for 6/8 tests -------------------------------------------
 

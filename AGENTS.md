@@ -40,6 +40,7 @@ All tests must pass before moving to the next module.
 | 9 | Grid position awareness | done |
 | 10 | Outlier clipping (KDE tail fix) | done |
 | 11 | 6/8 support | done |
+| 12 | Groove drift + coupled hits (`--groove-tightness`) | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -188,9 +189,9 @@ Stratified fallback chain with grid_pos (6 levels):
 
 `grid_pos=None` → offset=0 → levels 1,2,3,4 unchanged (backward compat).
 
-4/4 gate in `humanise()` is conditional: only fires when the loaded profile
-contains grid-pos buckets (detected by `key.split("|")[-1].isdigit()`). Legacy
-profiles without grid-pos keys skip the check and work on any time signature.
+Grid-position lookups only run on 4/4 files (positional buckets assume a 4/4
+bar). Non-4/4 files are accepted and pass `grid_pos=None`, falling back to the
+per-instrument ms deviation buckets — there is no 4/4 rejection gate.
 
 rock.json rebuilt from GMD: 315 buckets (277 grid-position, 38 legacy fallback),
 7 non-4/4 files skipped.
@@ -228,10 +229,10 @@ Default `"16"` unchanged; all existing callers unaffected.
 
 **`humanise()` changes:**
 - Calls `detect_meter(mid)` after the type-2 check; sets `grid = "8"` for 6/8.
-- 4/4 gate bypassed for 6/8 files (`meter != "6/8"`).
-- Both note-processing loops pass `grid` to `quantise_to_grid` and set
-  `gp = None if meter == "6/8"` — skips positional lookup, uses per-instrument
-  ms deviation buckets, which transfer well across meters.
+- Both note-processing loops pass `grid` to `quantise_to_grid`; positional lookup
+  (`grid_pos`) runs only for 4/4 files — 6/8 and other non-4/4 meters pass
+  `grid_pos=None` and use the per-instrument ms deviation buckets, which
+  transfer well across meters.
 
 No profile rebuild needed.
 
@@ -254,3 +255,33 @@ Key decisions:
   matched key used for mean lookup; level unchanged.
 - `_build_pairs` and `_sample_bucket` unchanged.
 - Requires profile rebuild to populate `bucket_offset_means` in `_meta`.
+
+## Implementation notes — module 12: groove drift + coupled hits
+
+Replaces independent per-hit timing with one AR(1) drift clock plus coupled
+(same-tick) hits. User-facing knob: `--groove-tightness` (phi, default 0.4).
+No profile rebuild — reuses the existing `rock.json`.
+
+- `GrooveDrift` class in `humanise.py`: a shifted solo hit advances
+  `drift = phi*drift + sqrt(1-phi**2)*c` on the mean-centred sample, then adds a
+  small independent residual (`RESIDUAL_SHARE = 0.15` variance split).
+- `phi == 0.0` is an exact bypass — identical to the pre-module-12 arithmetic,
+  with drift and coupling both inert.
+- Coupled hits (same original tick as the anchor solo hit) land at the anchor's
+  actual emitted tick ± a ±1 ms-capped residual and do not advance the clock.
+- The residual uses a dedicated RNG seeded from `seed`, so the offset/velocity
+  sample stream is identical across phi values.
+- Output lag-1 autocorrelation is `(1 - RESIDUAL_SHARE) * phi`, not phi.
+
+See CLAUDE.md module 12 notes for the full design rationale.
+
+## Implementation notes — Step 1 engine fixes (2026-07)
+
+- **Drum-channel filter:** only notes on MIDI channel 10 (`DRUM_CHANNEL = 9` in
+  `humanise.py`) are humanised by default; melodic parts on drum-range note
+  numbers pass through untouched. `--all-channels` / `all_channels=True` opts out.
+- **Straight non-4/4 meters accepted:** the 4/4 rejection gate was removed.
+  Non-4/4, non-6/8 files (3/4, 5/4, non-6/8 mixes) pass `grid_pos=None` and use
+  the per-instrument buckets — the 6/8 precedent. 6/8-mixed files still raise.
+- **phi default is 0.4** (`--groove-tightness`), calibrated from GMD
+  (recommended ~0.374; see `scripts/calibrate_phi.py`).

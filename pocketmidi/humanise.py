@@ -25,6 +25,11 @@ from pocketmidi.midi_utils import (
 
 EPSILON_TICKS = 1
 
+# MIDI channel 10 (0-indexed 9) — the GM drum channel. Only notes on this channel are
+# humanised by default; melodic parts often use drum-range note numbers and must not
+# be treated as kit hits. Opt out with all_channels=True (--all-channels).
+DRUM_CHANNEL = 9
+
 
 @dataclasses.dataclass(frozen=True)
 class BucketProfile:
@@ -280,7 +285,8 @@ def humanise(
     timing_only: bool = False,
     velocity_only: bool = False,
     push: bool = False,
-    phi: float = 0.5,
+    phi: float = 0.4,
+    all_channels: bool = False,
 ) -> None:
     if timing_only and velocity_only:
         raise ValueError("timing_only and velocity_only are mutually exclusive")
@@ -297,20 +303,12 @@ def humanise(
         raise ValueError("Type 2 MIDI files are not supported")
     meter = detect_meter(mid)   # raises ValueError for 6/8 mixed with other signatures
     grid = "8" if meter == "6/8" else "16"
-    # Only enforce 4/4 when the profile contains grid-position-aware buckets.
-    # A grid-pos key ends with a numeric segment (e.g. "rock|beat|kick|hard|3").
-    # Plain profiles work on any uniform time signature and on non-6/8 mixed-meter
-    # files (the 16th-note grid is valid for all quarter-note-based meters).
-    # detect_meter() above has already rejected 6/8-mixed files for all profiles.
-    profile_has_grid_pos = any(
-        key.split("|")[-1].isdigit() for key in profiles.buckets
-    )
-    if profile_has_grid_pos and meter != "6/8" and not is_four_four(mid):
-        raise ValueError(
-            "Only 4/4 time is supported (the loaded profile contains grid-position "
-            "buckets that assume a 4/4 bar length). "
-            "Found a non-4/4 time_signature message in the MIDI file."
-        )
+    # Grid-position buckets assume a 4/4 bar, so positional lookups only run on 4/4
+    # files. Straight non-4/4 meters (3/4, 5/4, non-6/8 mixed-meter files) are
+    # accepted with grid_pos=None — the 6/8 precedent — and fall back to the
+    # per-instrument ms deviation buckets, which transfer well across meters.
+    # detect_meter() above has already rejected 6/8-mixed files.
+    use_grid_pos = meter != "6/8" and is_four_four(mid)
     out_mid = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     tempo_map = build_tempo_map(mid)
     ppq = mid.ticks_per_beat
@@ -333,11 +331,12 @@ def humanise(
                 msg.type == "note_on"
                 and msg.velocity > 0
                 and hasattr(msg, "note")
+                and (all_channels or msg.channel == DRUM_CHANNEL)
                 and msg.note in TD11_TO_GROUP
             )
             if shiftable:
-                gp = (None if meter == "6/8"
-                      else grid_position_in_bar(quantise_to_grid(abs_t, ppq, grid), ppq))
+                gp = (grid_position_in_bar(quantise_to_grid(abs_t, ppq, grid), ppq)
+                      if use_grid_pos else None)
                 shiftable = (
                     _lookup(
                         profiles, genre, beat_type, TD11_TO_GROUP[msg.note],
@@ -385,8 +384,8 @@ def humanise(
             if will_shift[idx]:
                 group = TD11_TO_GROUP[msg.note]
                 grid_tick = quantise_to_grid(abs_t, ppq, grid)
-                grid_pos = (None if meter == "6/8"
-                            else grid_position_in_bar(grid_tick, ppq))
+                grid_pos = (grid_position_in_bar(grid_tick, ppq)
+                            if use_grid_pos else None)
                 bucket, level, key_used = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
                 offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 

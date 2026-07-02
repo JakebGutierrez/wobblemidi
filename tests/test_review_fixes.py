@@ -44,7 +44,9 @@ def _chord_midi(path, ppq=480):
     ev.sort(key=lambda e: (e[0], 0 if e[1] == "off" else 1))
     prev = 0
     for t, kind, n, v in ev:
-        tr.append(Message("note_on", note=n,
+        # channel=9: the drum channel — required since the drum-channel filter,
+        # otherwise these notes pass through and the test exercises nothing.
+        tr.append(Message("note_on", channel=9, note=n,
                           velocity=v if kind == "on" else 0, time=t - prev))
         prev = t
     mid.save(path)

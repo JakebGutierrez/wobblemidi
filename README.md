@@ -38,7 +38,8 @@ pocketmidi drums.mid drums_humanised.mid --intensity 0.3
 | `--section` | `beat` | Pass `fill` for fill passages — uses a separate timing distribution. |
 | `--genre` | `rock` | Profile to use. Only `rock` is included in v1. |
 | `--seed` | none | Integer seed for reproducible output. |
-| `--groove-tightness` | `0.5` | 0.0–<1.0. How much the kit shares one drifting internal clock. `0` = every hit timed independently (twitchy); higher values make hits wander together as a pocket, and land simultaneously-notated hits (kick+snare) together. The overall amount of timing spread stays roughly the same — the knob mainly changes its *character* (how correlated hits are). |
+| `--groove-tightness` | `0.4` | 0.0–<1.0. How much the kit shares one drifting internal clock. `0` = every hit timed independently (twitchy); higher values make hits wander together as a pocket, and land simultaneously-notated hits (kick+snare) together. The overall amount of timing spread stays roughly the same — the knob mainly changes its *character* (how correlated hits are). |
+| `--all-channels` | off | Humanise drum-range notes on every MIDI channel. By default only channel 10 (the standard drum channel) is touched, so melodic parts that happen to use drum-range note numbers are left alone. |
 | `--timing-only` | off | Apply timing humanisation only; leave velocities unchanged. |
 | `--velocity-only` | off | Apply velocity humanisation only; leave timing unchanged. |
 | `--push` | off | Include the directional timing tendencies of the source drummers. Without this flag, timing variation is centred on the grid — natural human imprecision without systematic push or drag. Use `--push` if you want a specific "leaning into the beat" feel that matches the original recordings. |
@@ -60,7 +61,8 @@ When humanising, each note is snapped to the nearest 16th-note grid position, th
 
 - Type 0 and type 1 MIDI files only
 - Roland TD-11 note mapping (GM-compatible plus notes 22 and 26 for hi-hat edge variants)
-- 4/4, 3/4, and other straight-grid time signatures
+- Only MIDI channel 10 (the standard drum channel) is humanised by default — pass `--all-channels` to include drum-range notes on other channels
+- 4/4, 3/4, and other straight-grid time signatures (grid-position awareness applies to 4/4 only; other meters use the per-instrument distributions)
 - 6/8 files are supported — uses an eighth-note grid automatically
 
 ## Building profiles from GMD
