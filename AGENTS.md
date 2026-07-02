@@ -259,7 +259,8 @@ Key decisions:
 ## Implementation notes — module 12: groove drift + coupled hits
 
 Replaces independent per-hit timing with one AR(1) drift clock plus coupled
-(same-tick) hits. User-facing knob: `--groove-tightness` (phi, default 0.4).
+(same-tick) hits — kit-wide across all tracks since the Step 1 engine fixes.
+User-facing knob: `--groove-tightness` (phi, default 0.4).
 No profile rebuild — reuses the existing `rock.json`.
 
 - `GrooveDrift` class in `humanise.py`: a shifted solo hit advances
@@ -285,3 +286,9 @@ See CLAUDE.md module 12 notes for the full design rationale.
   the per-instrument buckets — the 6/8 precedent. 6/8-mixed files still raise.
 - **phi default is 0.4** (`--groove-tightness`), calibrated from GMD
   (recommended ~0.374; see `scripts/calibrate_phi.py`).
+- **Kit-wide groove clock:** the drift clock and chord coupling run on one
+  absolute-time-ordered stream merged across all tracks (chords keyed by
+  original absolute tick across tracks); windowing and delta reconstruction
+  stay per-track. Single-track output is byte-identical to the per-track
+  engine; multi-track same-tick hits land ≤2 ticks apart at phi=0.5 (was
+  ~73 ms flams). See CLAUDE.md Step 1 notes for details.

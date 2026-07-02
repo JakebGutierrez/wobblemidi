@@ -242,13 +242,15 @@ COUPLED_RESIDUAL_MS = 1.0      # … capped so each coupled member stays within 
 
 
 class GrooveDrift:
-    """One drummer's internal clock for a single track.
+    """One drummer's internal clock for the whole kit.
 
     A shifted *solo* hit advances an AR(1) drift and adds a small independent residual, so the
     kit's timing wanders together (correlated) instead of scattering hit-to-hit while the
-    per-hit spread is preserved: for a stationary bucket ``Var(step()) == Var(c)``. Constructed
-    and used only when ``phi > 0`` — ``phi == 0`` is an exact bypass in ``humanise()`` (no drift,
-    no coupling), so this class never has to reproduce the legacy path.
+    per-hit spread is preserved: for a stationary bucket ``Var(step()) == Var(c)``. One instance
+    is shared across all tracks — hits are fed to it in absolute-time order regardless of which
+    track they live on. Constructed and used only when ``phi > 0`` — ``phi == 0`` is an exact
+    bypass in ``humanise()`` (no drift, no coupling), so this class never has to reproduce the
+    legacy path.
     """
 
     def __init__(self, phi: float, rng: Any = None) -> None:
@@ -312,7 +314,13 @@ def humanise(
     out_mid = mido.MidiFile(type=mid.type, ticks_per_beat=mid.ticks_per_beat)
     tempo_map = build_tempo_map(mid)
     ppq = mid.ticks_per_beat
-    out_tracks = []
+    n_tracks = len(mid.tracks)
+
+    # ---- Pass 1 (per track): absolute ticks, will_shift, windowing bounds ----
+    tracks_abs: list[list[tuple[int, mido.Message]]] = []
+    tracks_will_shift: list[list[bool]] = []
+    tracks_next_fixed: list[list[float]] = []
+    tracks_paired_off: list[list[float]] = []
 
     for track in mid.tracks:
         # Pass 1a — collect abs ticks (per-track, reset to 0)
@@ -366,124 +374,142 @@ def humanise(
                     note_on_idx = open_note_ons[key].popleft()
                     paired_note_off_abs[note_on_idx] = abs_t
 
-        # Pass 2
-        out_abs: list[tuple[int, mido.Message]] = []
-        prev_note_on_abs = -EPSILON_TICKS
-        prev_emitted_abs = 0
-        # Original (pre-shift) tick of the most recent emitted note_on. Used to
-        # detect chords: two note_ons notated at the same tick are simultaneous
-        # hits and must be allowed to stay on the same tick, rather than being
-        # force-separated by EPSILON_TICKS (which flams every kit-wide accent).
-        prev_note_on_orig_abs = -EPSILON_TICKS
-        # Groove-drift state: one internal clock per track. None at phi==0 (exact bypass).
-        groove = GrooveDrift(phi, resid_rng) if phi != 0.0 else None
-        chord_tick: int | None = None   # original tick of the current chord's anchor solo hit
-        chord_anchor_abs = 0            # that anchor's ACTUAL emitted tick; coupled members land near it
+        tracks_abs.append(abs_messages)
+        tracks_will_shift.append(will_shift)
+        tracks_next_fixed.append(next_fixed)
+        tracks_paired_off.append(paired_note_off_abs)
 
-        for idx, (abs_t, msg) in enumerate(abs_messages):
-            if will_shift[idx]:
-                group = TD11_TO_GROUP[msg.note]
-                grid_tick = quantise_to_grid(abs_t, ppq, grid)
-                grid_pos = (grid_position_in_bar(grid_tick, ppq)
-                            if use_grid_pos else None)
-                bucket, level, key_used = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
-                offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
+    # ---- Pass 2 (global): one absolute-time-ordered stream across all tracks ----
+    # The groove clock and chord coupling are KIT-WIDE state. Multi-track drum MIDI
+    # (kick/snare/hat exported on separate tracks — the normal DAW layout) must share
+    # ONE drifting clock, and hits notated on the same tick must couple across tracks;
+    # per-track clocks flammed cross-track accents by up to ~73 ms at phi=0.5.
+    # Windowing and delta-time reconstruction stay per-track. For a single-track file
+    # the merged order equals the original order, so output is byte-identical.
+    merged = [
+        (abs_t, ti, i)
+        for ti, abs_msgs in enumerate(tracks_abs)
+        for i, (abs_t, _msg) in enumerate(abs_msgs)
+    ]
+    merged.sort(key=lambda e: e[0])  # stable — ties keep track order, then message order
 
-                if velocity_only:
-                    new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
-                    out_abs.append((abs_t, msg.copy(velocity=new_vel)))
-                    prev_note_on_abs = abs_t
-                    prev_note_on_orig_abs = abs_t
-                    prev_emitted_abs = abs_t
-                    if verbose:
-                        print(f"  note {msg.note} ({group}): level {level}")
-                    continue
+    out_abs: list[list[tuple[int, mido.Message]]] = [[] for _ in range(n_tracks)]
+    prev_note_on_abs = [-EPSILON_TICKS] * n_tracks
+    prev_emitted_abs = [0] * n_tracks
+    # Original (pre-shift) tick of the most recent emitted note_on, per track. Used to
+    # detect same-track chords: two note_ons notated at the same tick are simultaneous
+    # hits and must be allowed to stay on the same tick, rather than being
+    # force-separated by EPSILON_TICKS (which flams every kit-wide accent).
+    prev_note_on_orig_abs = [-EPSILON_TICKS] * n_tracks
+    # Groove-drift state: ONE internal clock for the whole kit. None at phi==0 (exact bypass).
+    groove = GrooveDrift(phi, resid_rng) if phi != 0.0 else None
+    chord_tick: int | None = None   # original tick of the current chord's anchor solo hit (any track)
+    chord_anchor_abs = 0            # that anchor's ACTUAL emitted tick; coupled members land near it
 
-                mu_debias = profiles.bucket_offset_means.get(key_used, 0.0)
-                is_chord_anchor = False
-                if phi == 0.0:
-                    # Exact pre-drift behaviour: drift and coupling both inert.
-                    offset_ms = offset_ms_raw - (0.0 if push else mu_debias)
-                    candidate = grid_tick + _ms_offset_to_ticks(
-                        grid_tick, offset_ms * intensity, tempo_map, ppq
-                    )
-                elif abs_t == chord_tick:
-                    # Coupled member (same original tick as the anchor solo hit): land at the
-                    # anchor's ACTUAL emitted tick plus a tiny ±COUPLED_RESIDUAL_MS residual — NOT
-                    # its pre-clamp desired offset — then let the window clamp to this member's own
-                    # legal range. Targeting the real landing keeps the chord tight even when the
-                    # anchor was window-clamped or a fixed same-tick event sits between members.
-                    # Does NOT advance the clock.
-                    c = offset_ms_raw - float(bucket.offsets.mean())
-                    residual_ms = max(-COUPLED_RESIDUAL_MS,
-                                      min(COUPLED_RESIDUAL_MS, COUPLED_RESIDUAL_FRAC * c))
-                    candidate = chord_anchor_abs + _ms_offset_to_ticks(
-                        chord_anchor_abs, residual_ms * intensity, tempo_map, ppq
-                    )
-                else:
-                    # Solo hit / chord anchor: centre on the bucket's own mean (so a legacy/meanless
-                    # profile's lean is never amplified), advance the clock + independent residual,
-                    # then re-apply the systematic lean per the push contract.
-                    mu_center = float(bucket.offsets.mean())
-                    fluct = groove.step(offset_ms_raw - mu_center, float(bucket.offsets.std()))
-                    offset_ms = fluct + (mu_center - (0.0 if push else mu_debias))
-                    candidate = grid_tick + _ms_offset_to_ticks(
-                        grid_tick, offset_ms * intensity, tempo_map, ppq
-                    )
-                    chord_tick = abs_t
-                    is_chord_anchor = True
-                if timing_only:
-                    new_vel = msg.velocity
-                else:
-                    new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
+    for abs_t, ti, idx in merged:
+        msg = tracks_abs[ti][idx][1]
+        if tracks_will_shift[ti][idx]:
+            group = TD11_TO_GROUP[msg.note]
+            grid_tick = quantise_to_grid(abs_t, ppq, grid)
+            grid_pos = (grid_position_in_bar(grid_tick, ppq)
+                        if use_grid_pos else None)
+            bucket, level, key_used = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
+            offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
-                if abs_t == prev_note_on_orig_abs:
-                    # Chord member (same original tick as the previous note_on):
-                    # allow it to share prev_emitted_abs so the hit stays tight.
-                    lower = prev_emitted_abs
-                else:
-                    lower = max(prev_emitted_abs, prev_note_on_abs + EPSILON_TICKS)
-                upper_exclusive = min(
-                    paired_note_off_abs[idx],
-                    next_fixed[idx + 1] if idx + 1 < N else math.inf,
-                )
-                ceiling = upper_exclusive - 1  # math.inf - 1 == inf; safe
-
-                if lower > ceiling:
-                    # No legal window: hold at prev_emitted_abs (guarantees non-negative
-                    # delta; same-tick with a fixed event is accepted as unavoidable).
-                    new_abs = prev_emitted_abs
-                else:
-                    new_abs = int(max(lower, min(candidate, ceiling)))
-
-                out_abs.append((new_abs, msg.copy(velocity=new_vel)))
-                prev_note_on_abs = new_abs
-                prev_note_on_orig_abs = abs_t
-                prev_emitted_abs = new_abs
-                if is_chord_anchor:
-                    # Record the anchor's real landing so coupled members track it, not the
-                    # pre-clamp desired offset.
-                    chord_anchor_abs = new_abs
+            if velocity_only:
+                new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
+                out_abs[ti].append((abs_t, msg.copy(velocity=new_vel)))
+                prev_note_on_abs[ti] = abs_t
+                prev_note_on_orig_abs[ti] = abs_t
+                prev_emitted_abs[ti] = abs_t
                 if verbose:
                     print(f"  note {msg.note} ({group}): level {level}")
+                continue
 
+            mu_debias = profiles.bucket_offset_means.get(key_used, 0.0)
+            is_chord_anchor = False
+            if phi == 0.0:
+                # Exact pre-drift behaviour: drift and coupling both inert.
+                offset_ms = offset_ms_raw - (0.0 if push else mu_debias)
+                candidate = grid_tick + _ms_offset_to_ticks(
+                    grid_tick, offset_ms * intensity, tempo_map, ppq
+                )
+            elif abs_t == chord_tick:
+                # Coupled member (same original tick as the anchor solo hit, on ANY track):
+                # land at the anchor's ACTUAL emitted tick plus a tiny ±COUPLED_RESIDUAL_MS
+                # residual — NOT its pre-clamp desired offset — then let the window clamp to
+                # this member's own legal range. Targeting the real landing keeps the chord
+                # tight even when the anchor was window-clamped or a fixed same-tick event
+                # sits between members. Does NOT advance the clock.
+                c = offset_ms_raw - float(bucket.offsets.mean())
+                residual_ms = max(-COUPLED_RESIDUAL_MS,
+                                  min(COUPLED_RESIDUAL_MS, COUPLED_RESIDUAL_FRAC * c))
+                candidate = chord_anchor_abs + _ms_offset_to_ticks(
+                    chord_anchor_abs, residual_ms * intensity, tempo_map, ppq
+                )
             else:
-                out_abs.append((abs_t, msg))
-                if msg.type == "note_on" and msg.velocity > 0:
-                    prev_note_on_abs = abs_t
-                    prev_note_on_orig_abs = abs_t
-                prev_emitted_abs = abs_t
+                # Solo hit / chord anchor: centre on the bucket's own mean (so a legacy/meanless
+                # profile's lean is never amplified), advance the clock + independent residual,
+                # then re-apply the systematic lean per the push contract.
+                mu_center = float(bucket.offsets.mean())
+                fluct = groove.step(offset_ms_raw - mu_center, float(bucket.offsets.std()))
+                offset_ms = fluct + (mu_center - (0.0 if push else mu_debias))
+                candidate = grid_tick + _ms_offset_to_ticks(
+                    grid_tick, offset_ms * intensity, tempo_map, ppq
+                )
+                chord_tick = abs_t
+                is_chord_anchor = True
+            if timing_only:
+                new_vel = msg.velocity
+            else:
+                new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
 
-        # Convert abs ticks back to delta times
+            if abs_t == prev_note_on_orig_abs[ti]:
+                # Chord member (same original tick as the previous note_on on this track):
+                # allow it to share prev_emitted_abs so the hit stays tight.
+                lower = prev_emitted_abs[ti]
+            else:
+                lower = max(prev_emitted_abs[ti], prev_note_on_abs[ti] + EPSILON_TICKS)
+            upper_exclusive = min(
+                tracks_paired_off[ti][idx],
+                tracks_next_fixed[ti][idx + 1] if idx + 1 < len(tracks_abs[ti]) else math.inf,
+            )
+            ceiling = upper_exclusive - 1  # math.inf - 1 == inf; safe
+
+            if lower > ceiling:
+                # No legal window: hold at prev_emitted_abs (guarantees non-negative
+                # delta; same-tick with a fixed event is accepted as unavoidable).
+                new_abs = prev_emitted_abs[ti]
+            else:
+                new_abs = int(max(lower, min(candidate, ceiling)))
+
+            out_abs[ti].append((new_abs, msg.copy(velocity=new_vel)))
+            prev_note_on_abs[ti] = new_abs
+            prev_note_on_orig_abs[ti] = abs_t
+            prev_emitted_abs[ti] = new_abs
+            if is_chord_anchor:
+                # Record the anchor's real landing so coupled members track it, not the
+                # pre-clamp desired offset.
+                chord_anchor_abs = new_abs
+            if verbose:
+                print(f"  note {msg.note} ({group}): level {level}")
+
+        else:
+            out_abs[ti].append((abs_t, msg))
+            if msg.type == "note_on" and msg.velocity > 0:
+                prev_note_on_abs[ti] = abs_t
+                prev_note_on_orig_abs[ti] = abs_t
+            prev_emitted_abs[ti] = abs_t
+
+    # ---- Pass 3 (per track): convert abs ticks back to delta times ----
+    for ti in range(n_tracks):
         new_track = mido.MidiTrack()
         prev = 0
-        for abs_t, msg in out_abs:
+        for abs_t, msg in out_abs[ti]:
             delta = abs_t - prev
             assert delta >= 0, "BUG: negative delta — likely invalid MIDI input"
             new_track.append(msg.copy(time=delta))
             prev = abs_t
-        out_tracks.append(new_track)
+        out_mid.tracks.append(new_track)
 
-    for t in out_tracks:
-        out_mid.tracks.append(t)
     out_mid.save(str(output_path))

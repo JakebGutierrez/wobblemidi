@@ -304,9 +304,10 @@ Key implementation decisions:
 
 ## Implementation notes — module 12: groove drift + coupled hits
 
-Replaces independent per-hit timing with **one AR(1) drift clock per track** plus **coupled
-(same-tick) hits**. User-facing knob: `--groove-tightness` (phi, default 0.4). No profile
-rebuild — reuses the existing `rock.json`.
+Replaces independent per-hit timing with **one AR(1) drift clock** plus **coupled
+(same-tick) hits**. Kit-wide across all tracks since the Step 1 engine fixes (originally
+per-track — see below). User-facing knob: `--groove-tightness` (phi, default 0.4). No
+profile rebuild — reuses the existing `rock.json`.
 
 **`GrooveDrift` class in `humanise.py`.** A shifted *solo* hit does
 `drift = phi*drift + sqrt(1-phi**2)*c` (AR(1) on the mean-centred sample `c`), then
@@ -362,3 +363,20 @@ Safe engine fixes from the roadmap (`pocketmidi_roadmap.md`) — no GMD, no prof
   `detect_meter()`.
 - **phi default 0.4** (was 0.5) in both `humanise()` and `--groove-tightness`.
   Data-backed: GMD calibration recommends ~0.374 (`scripts/calibrate_phi.py`).
+- **Kit-wide groove clock:** `GrooveDrift`, `chord_tick`, and `chord_anchor_abs` moved
+  out of the per-track loop. `humanise()` now runs three passes: (1) per-track
+  precomputation (`abs_messages`, `will_shift`, `next_fixed`, `paired_note_off_abs` —
+  logic unchanged), (2) ONE global loop over all messages merged across tracks and
+  stable-sorted by absolute tick (ties keep track order, then message order), with
+  kit-wide clock/chord state and per-track windowing state indexed by track, (3)
+  per-track delta-time reconstruction (unchanged). Chords are keyed by original
+  absolute tick across tracks; a coupled member on another track targets the anchor's
+  post-clamp landing, clamped to its own track's window. For a single-track file the
+  merged order equals the original order, so output is **byte-identical** (verified
+  against the pre-refactor engine across phi/push/intensity/timing-only/velocity-only
+  with the real rock.json). Multi-track same-tick hits now land ≤2 ticks apart at
+  phi=0.5 (was up to ~73 ms flams; regression test
+  `TestKitWideClock::test_cross_track_same_tick_hits_land_together`). Note: for
+  multi-track files the RNG sample order changes from track-major to time-major, so
+  multi-track output differs from the old engine at ANY phi, including 0 — inherent
+  to stepping one clock in performance order.

@@ -1612,6 +1612,83 @@ class TestCoupling:
 
 
 # ---------------------------------------------------------------------------
+# TestKitWideClock — groove clock + coupling shared across tracks
+# ---------------------------------------------------------------------------
+
+class TestKitWideClock:
+    """The groove clock and chord coupling are kit-wide, not per-track.
+
+    Multi-track drum MIDI (kick/snare on separate tracks — the normal DAW
+    export) used to give each track its own drift clock and never coupled
+    cross-track same-tick hits: measured flams up to ~73 ms at phi=0.5.
+    """
+
+    PPQ = 480
+    TEMPO_US = 500_000  # 120 BPM → 1 tick ≈ 1.0417 ms
+    N_HITS = 16
+
+    def _two_track_midi(self, tmp_path) -> Path:
+        """kick(36) on track 1, snare(38) on track 2, notated on the SAME ticks."""
+        mid = mido.MidiFile(type=1, ticks_per_beat=self.PPQ)
+        conductor = mido.MidiTrack(); mid.tracks.append(conductor)
+        conductor.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        conductor.append(mido.MetaMessage("end_of_track", time=0))
+        for note in (36, 38):
+            tr = mido.MidiTrack(); mid.tracks.append(tr)
+            prev = 0
+            for i in range(self.N_HITS):
+                t = i * self.PPQ
+                tr.append(mido.Message("note_on", channel=9, note=note,
+                                       velocity=100, time=t - prev))
+                tr.append(mido.Message("note_off", channel=9, note=note,
+                                       velocity=0, time=200))
+                prev = t + 200
+            tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "two_track.mid"
+        mid.save(str(p))
+        return p
+
+    def _profile(self) -> LoadedProfile:
+        # Varied, meanless buckets so the drift clock is actually exercised.
+        return LoadedProfile(
+            buckets={
+                "rock|beat|kick":  BucketProfile(
+                    np.array([-20.0, -10.0, 0.0, 10.0, 20.0]), np.zeros(5), None),
+                "rock|beat|snare": BucketProfile(
+                    np.array([-30.0, -15.0, 0.0, 15.0, 30.0]), np.zeros(5), None),
+            },
+            velocity_thresholds={},
+        )
+
+    def _note_ticks(self, path, note) -> list[int]:
+        mid = mido.MidiFile(str(path))
+        out = []
+        for tr in mid.tracks:
+            t = 0
+            for msg in tr:
+                t += msg.time
+                if msg.type == "note_on" and msg.velocity > 0 and msg.note == note:
+                    out.append(t)
+        return sorted(out)
+
+    def test_cross_track_same_tick_hits_land_together(self, tmp_path):
+        # The 73 ms case: at phi=0.5 every kick/snare pair notated on the same tick
+        # must land within 2 ticks (~2 ms), coupled across tracks via the shared
+        # anchor. With per-track clocks this input flammed up to ~42 ticks.
+        inp = self._two_track_midi(tmp_path)
+        out = tmp_path / "out.mid"
+        humanise(inp, out, self._profile(), seed=3, phi=0.5)
+        kicks = self._note_ticks(out, 36)
+        snares = self._note_ticks(out, 38)
+        assert len(kicks) == len(snares) == self.N_HITS
+        # Windowing preserves per-track hit order, so pair i-th kick with i-th snare.
+        gaps = [abs(k - s) for k, s in zip(kicks, snares)]
+        assert max(gaps) <= 2, f"cross-track flam: gaps {gaps}"
+        # Guard: the clock must actually be moving hits, not holding everything on grid.
+        assert any(t != i * self.PPQ for i, t in enumerate(kicks))
+
+
+# ---------------------------------------------------------------------------
 # TestLegacyProfileNoAmplification + velocity-only clock, phi validation
 # ---------------------------------------------------------------------------
 

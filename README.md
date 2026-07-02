@@ -55,7 +55,7 @@ When humanising, each note is snapped to the nearest 16th-note grid position, th
 
 **Timing is centred on the grid by default.** The raw GMD data contains directional tendencies (some drummers consistently push certain beats ahead of the grid). Without `--push`, these are removed — you get the spread and feel of real drumming without inheriting a specific drummer's rushing or dragging habit.
 
-**One clock for the kit (`--groove-tightness`).** Sampling every hit's timing independently sounds twitchy — real drummers have a single internal clock that drifts slowly. pocketmidi keeps one running timing drift per track: each hit nudges it, and the hit is placed by that shared drift plus a small independent wiggle, so the kit breathes together instead of scattering. The overall amount of timing variation stays about the same at any setting; the knob mainly changes how correlated it is. Hits notated on the same tick share one nudge, so kit-wide accents stay tight instead of flamming.
+**One clock for the kit (`--groove-tightness`).** Sampling every hit's timing independently sounds twitchy — real drummers have a single internal clock that drifts slowly. pocketmidi keeps one running timing drift for the whole kit — even when kick, snare, and hats live on separate tracks: each hit nudges it, and the hit is placed by that shared drift plus a small independent wiggle, so the kit breathes together instead of scattering. The overall amount of timing variation stays about the same at any setting; the knob mainly changes how correlated it is. Hits notated on the same tick share one nudge, across tracks too, so kit-wide accents stay tight instead of flamming.
 
 ## MIDI compatibility
 
