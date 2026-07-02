@@ -210,3 +210,5 @@ __marimo__/
 # Throwaway A/B ear-test samples (regenerate via scripts/make_demo.py).
 # The committed demo/rock_4bar_*.mid reference demos are intentionally kept.
 demo/eartest/
+# Validation harness artifacts (gate profile, reports) — regenerate via scripts/validate.py
+validation/
