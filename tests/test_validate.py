@@ -18,6 +18,7 @@ from validate import (
     load_take,
     programmed_velocities,
     read_output_hits,
+    role_labels,
     signed_offset_ms,
 )
 
@@ -212,6 +213,81 @@ def test_evaluate_level_smoke(tmp_path):
 
     # different seeds → different realisations
     assert out_runs[0]["ALL"]["off_mean"] != out_runs[1]["ALL"]["off_mean"]
+
+
+# ── anti-robotic metrics (spec addendum Fix 2) ───────────────────────────────
+
+def test_role_labels_two_cluster_ghost_accent():
+    v = [30] * 8 + [100] * 8
+    roles = role_labels(v)
+    assert set(roles[:8]) == {"soft"}
+    assert set(roles[8:]) == {"hard"}
+
+
+def test_role_labels_single_role_without_evidence():
+    # constant velocities → engine falls back → one shared role label
+    roles = role_labels([90] * 20)
+    assert len(set(roles)) == 1
+
+
+def test_role_labels_fixed_across_conditions():
+    # labels derive from the HUMAN velocities only — they are a property of the
+    # hit, not of any condition's output
+    v = [30, 100] * 8
+    assert list(role_labels(v)) == list(role_labels(v))
+
+
+def test_antirobotic_metrics_flat_vs_human(tmp_path):
+    """Flat input must score worst: zero-jump mass 1.0 and within-role sigma 0.
+    The human reference must show real micro-variation on both."""
+    take = _synthetic_take(bars=8)
+    from pocketmidi.humanise import load_profile as _lp
+    prof = _lp(SHIPPED_PROFILE)
+    results, _ = evaluate_level([take], "flat", {"shipped": prof}, seeds=[1], workdir=tmp_path)
+
+    inp = results["input"]["ALL"]
+    hum = results["human"]["ALL"]
+    out = results["profiles"]["shipped"][0]["ALL"]
+
+    assert inp["zjump_mass"] == 1.0          # every adjacent delta is exactly 0
+    assert inp["wrole_sigma"] == 0.0         # no spread within any role
+    assert hum["zjump_mass"] < 0.5           # humans rarely repeat identical velocities
+    assert hum["wrole_sigma"] > 0
+    # humanised output restores variation: strictly less robotic than the flat input
+    assert out["zjump_mass"] < inp["zjump_mass"]
+    assert out["wrole_sigma"] > 0
+
+
+def test_antirobotic_zero_jump_mass_coarsened_input(tmp_path):
+    """4-level coarsening collapses micro-differences into identical repeated
+    values → its zero-jump mass must sit clearly above the human original's.
+    (The within-role direction needs real role-structured playing — that is
+    what the real-GMD behaviour table validates; here we lock the mechanics.)"""
+    take = _synthetic_take(bars=8)
+    from pocketmidi.humanise import load_profile as _lp
+    prof = _lp(SHIPPED_PROFILE)
+    results, _ = evaluate_level([take], 4, {"shipped": prof}, seeds=[1], workdir=tmp_path)
+    assert results["input"]["ALL"]["zjump_mass"] > results["human"]["ALL"]["zjump_mass"] * 2
+
+
+def test_wrole_sigma_math():
+    """Exact mechanics: mean of per-(take, group, pos, role) stds over cells with
+    >= MIN_CELL_N hits; roles slice positions into separate cells."""
+    import pandas as pd
+    from validate import _wrole_sigma
+    df = pd.DataFrame({
+        "take": ["t"] * 12,
+        "group": ["snare"] * 12,
+        "pos": [4] * 12,
+        # one position, two roles: ghosts spread {28,30,32}x2, accents constant 100
+        "role": ["soft"] * 6 + ["hard"] * 6,
+        "vel": [28.0, 30.0, 32.0, 28.0, 30.0, 32.0] + [100.0] * 6,
+    })
+    expected_soft = np.std([28, 30, 32, 28, 30, 32], ddof=1)
+    assert _wrole_sigma(df) == pytest.approx((expected_soft + 0.0) / 2)
+    # without the role dimension the blended cell would show a huge fake spread
+    df_norole = df.assign(role="all")
+    assert _wrole_sigma(df_norole) > 30
 
 
 def test_read_output_hits_detects_misalignment(tmp_path):

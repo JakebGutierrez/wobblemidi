@@ -30,6 +30,14 @@ Metric conventions (all per instrument group, pooled over held-out takes):
     within-take fine structure only, the audit's / spec B2's convention.
   * every condition's hits align 1:1 with the input hits (humanise preserves
     note count and order), so contour metrics are hit-matched, not re-paired.
+  * anti-robotic metrics (spec addendum Fix 2): zero micro-jump mass (fraction of
+    adjacent same-instrument velocity deltas with |dv| <= 1 — a coarsened input
+    repeats identical values, humans almost never do) and within-(position, role)
+    velocity sigma (spread within a fixed musical role — ~0 is robotic, excess is
+    noise; scored TWO-SIDED against the human reference, not against the input).
+    Role labels are FIXED per hit: derived once from the HUMAN original velocities
+    using the engine's own relative-tier convention (_file_tier_thresholds), so
+    every condition is measured on identical cells.
 
 Robustness: profile conditions run over multiple fixed seeds; the report shows
 mean ± 95% CI half-width across seeds. Each take gets a distinct per-take seed
@@ -57,7 +65,13 @@ from scipy.stats import ks_2samp, spearmanr, t as t_dist, wasserstein_distance
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pocketmidi.humanise import LoadedProfile, humanise, load_profile
+from pocketmidi.humanise import (
+    LoadedProfile,
+    _file_tier_thresholds,
+    _velocity_tier,
+    humanise,
+    load_profile,
+)
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
@@ -95,6 +109,8 @@ METRIC_ROWS = [
     ("t_lag1",         "timing lag-1 autocorr",                "prop"),
     ("xgap_sigma",     "same-slot cross-instr gap sigma [ms]", "prop"),
     ("vel_wpos_sigma", "velocity within-position sigma",       "prop"),
+    ("zjump_mass",     "zero micro-jump mass (|dv|<=1)",       "prop"),
+    ("wrole_sigma",    "within-(position, role) vel sigma",    "prop"),
     ("vjump_mean",     "adjacent velocity-jump mean",          "prop"),
     ("vjump_w1",       "velocity-jump W1 dist-to-human",       "dist"),
     ("v_lag1",         "velocity lag-1 autocorr",              "prop"),
@@ -216,6 +232,34 @@ def programmed_velocities(take: Take, levels: int | str) -> np.ndarray:
     return out
 
 
+_ROLE_SENTINEL = (-1.0, -1.0)
+
+
+def role_labels(human_vels) -> np.ndarray:
+    """FIXED per-hit role labels for one (take, instrument) from the HUMAN original.
+
+    Uses the engine's relative-tier convention (_file_tier_thresholds / B4) so the
+    harness, build, and runtime all share one notion of "role". Labels come from the
+    human take — not from each condition's own velocities — so every condition is
+    compared on identical (position, role) cells (the Codex fixed-labels tightening),
+    and roles stay meaningful even for a flat input. Insufficient evidence (the
+    engine would fall back to absolute thresholds, which are not meaningful here)
+    → one single role, degrading the cell to plain (position)."""
+    v = np.asarray(human_vels, dtype=float)
+    low, high = _file_tier_thresholds(v, _ROLE_SENTINEL)
+    if (low, high) == _ROLE_SENTINEL:
+        return np.full(len(v), "all", dtype=object)
+    return np.array([_velocity_tier(x, (low, high)) for x in v], dtype=object)
+
+
+def take_role_labels(take: Take) -> np.ndarray:
+    roles = np.empty(len(take.notes), dtype=object)
+    for g in np.unique(take.groups):
+        m = take.groups == g
+        roles[m] = role_labels(take.human_vel[m])
+    return roles
+
+
 def build_programmed_midi(take: Take, prog_vels: np.ndarray) -> mido.MidiFile:
     """Single-track type-0 file: original tempo map, 4/4, note_ons on the grid.
 
@@ -309,6 +353,17 @@ def _wpos_sigma(sub: pd.DataFrame) -> float:
     return float(stds.mean()) if len(stds) else float("nan")
 
 
+def _wrole_sigma(sub: pd.DataFrame) -> float:
+    """Within-(position, role) velocity sigma (anti-robotic, addendum Fix 2).
+
+    Role is the fixed human-derived label, so this is the spread a condition puts
+    WITHIN one musical role at one position — ~0 means robotically identical hits,
+    human-level means natural variation, far above human means noise."""
+    cells = sub.groupby(["take", "group", "pos", "role"])["vel"].agg(["std", "count"])
+    stds = cells.loc[cells["count"] >= MIN_CELL_N, "std"]
+    return float(stds.mean()) if len(stds) else float("nan")
+
+
 def _jumps(sub: pd.DataFrame, col: str) -> np.ndarray:
     """|velocity difference| between adjacent hits of the same instrument."""
     out = []
@@ -388,6 +443,8 @@ def compute_metrics(
             "off_ks": float(ks_2samp(sub["off"], sub["h_off"]).statistic),
             "t_lag1": _lag1(sub, "off", kitwide=(g == "ALL")),
             "vel_wpos_sigma": _wpos_sigma(sub),
+            "zjump_mass": float((jumps_c <= 1.0).mean()) if len(jumps_c) else float("nan"),
+            "wrole_sigma": _wrole_sigma(sub),
             "vjump_mean": float(np.mean(jumps_c)) if len(jumps_c) else float("nan"),
             "vjump_w1": (
                 float(wasserstein_distance(jumps_c, jumps_h))
@@ -438,6 +495,7 @@ def evaluate_level(
             "group": tk.groups,
             "pos": tk.grid_pos,
             "slot": tk.grid_ticks,
+            "role": take_role_labels(tk),   # fixed human-derived labels, all conditions
             "ord": np.arange(len(tk.notes)),
             "h_off": tk.human_off,
             "h_vel": tk.human_vel.astype(float),
@@ -565,6 +623,18 @@ def print_sanity(results: dict, profile_names: list[str]) -> None:
             f"  → closer to human than input? {'YES' if v_closer else 'NO'}"
             "  (old schema expected to lose here — that is the rebuild's motivation)"
         )
+    # anti-robotic metrics (addendum Fix 2): TWO-SIDED distance to the human
+    # reference — too little spread is robotic, too much is noise. The coarsened
+    # input should now legitimately lose these.
+    hum = results["human"]["ALL"]
+    for m in ("zjump_mass", "wrole_sigma"):
+        h = hum[m]
+        d_inp = abs(inp[m] - h)
+        line = f"  anti-robotic {m:<12}: human {h:6.2f} | input {inp[m]:6.2f} (d={d_inp:5.2f})"
+        for name in profile_names:
+            v = agg[name]["ALL"][m][0]
+            line += f" | {name} {v:6.2f} (d={abs(v - h):5.2f}{'✓' if abs(v - h) < d_inp else ' '})"
+        click.echo(line + "   ✓ = closer to human than input")
 
 
 def _jsonable(obj):
@@ -677,8 +747,8 @@ def main(gmd_dir: Path, candidate: Path | None, gate_profile: Path, rebuild_gate
             click.echo("\n" + "=" * 100)
             click.echo("SENSITIVITY (gate profile only; context, not the gate): "
                        "input coarseness 2 / 8 / flat")
-            sens_metrics = ["vel_wpos_sigma", "vjump_mean", "vjump_w1", "contour_mae",
-                            "spear_orig", "off_w1"]
+            sens_metrics = ["vel_wpos_sigma", "zjump_mass", "wrole_sigma", "vjump_mean",
+                            "vjump_w1", "contour_mae", "spear_orig", "off_w1"]
             for lev in [2, 8, "flat"]:
                 r_lev, _ = evaluate_level(
                     takes, lev, {"gate": loaded["gate"]}, seed_list, workdir
