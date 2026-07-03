@@ -101,8 +101,13 @@ def build_input() -> mido.MidiFile:
               help="Shared seed: both renders draw from identical RNG streams.")
 @click.option("--out-dir", type=click.Path(file_okay=False, path_type=Path),
               default=OUT_DIR, show_default=True)
-def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path) -> None:
+@click.option("--timing-sweep", default="0.3,0.5,0.7", show_default=True,
+              help="Comma-separated intensities for extra timing-only renders "
+                   "(velocities untouched); empty string to skip.")
+def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path,
+         timing_sweep: str) -> None:
     """Write input/old/new ear-test files for the velocity-rebuild A/B."""
+    timing_sweep = [float(s) for s in timing_sweep.split(",") if s.strip()]
     out_dir.mkdir(parents=True, exist_ok=True)
     input_path = out_dir / "rock_ghosts_input.mid"
     build_input().save(str(input_path))
@@ -126,6 +131,18 @@ def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path) -> None:
         humanise(input_path, out_path, cand_prof,
                  genre="rock", beat_type="beat", seed=seed, **kwargs)
         click.echo(f"{label.replace('_', ' '):<15}: {out_path}")
+
+    # Timing-only intensity sweep: same seed → identical offset draws, scaled
+    # linearly toward the grid. Isolates "too much timing spread at the default"
+    # from "spread feels random regardless of amount" (which would point at the
+    # correlation structure, not the amount). The plain timingonly file above is
+    # the intensity-1.0 reference.
+    for i in timing_sweep:
+        out_path = out_dir / f"rock_ghosts_new_timingonly_i{int(round(i * 100)):02d}.mid"
+        humanise(input_path, out_path, cand_prof,
+                 genre="rock", beat_type="beat", seed=seed,
+                 timing_only=True, intensity=i)
+        click.echo(f"timing i={i:.1f}  : {out_path}")
 
     click.echo("\nSame seed, default settings (intensity 1.0, phi 0.4, no push).")
     click.echo("Listen for: ghost/backbeat roles surviving on the snare, and the")
