@@ -106,6 +106,58 @@ def _velocity_tier(velocity: int, thresholds: tuple[float, float]) -> str:
         return "hard"
 
 
+# Relative velocity tiering (module 13 / spec B4). GMD-absolute tier thresholds
+# collapse for programmed parts whose velocities all sit inside one GMD tertile —
+# every hit routes to the same tier bucket regardless of the part's own dynamics.
+# With enough evidence, tiers come from the user's own per-instrument distribution.
+RELATIVE_TIER_MIN_HITS = 8      # need >= 8 hits of the instrument in the file ...
+RELATIVE_TIER_MIN_SPREAD = 12   # ... and p90-p10 >= 12 velocity units to trust relative tiers
+TWO_CLUSTER_MIN_FRAC = 0.15     # each side of a two-cluster split must hold >= 15% of hits
+TWO_CLUSTER_DOMINANCE = 1.5     # the gap must be >= 1.5x either side's spread — it has to
+                                # DWARF within-cluster spread (ghost/accent), so a 3-level
+                                # evenly-spaced part still gets tertiles, not soft/hard
+
+
+def _file_tier_thresholds(
+    velocities: Any, absolute: tuple[float, float]
+) -> tuple[float, float]:
+    """Per-file (low, high) tier thresholds for one instrument (spec B4).
+
+    - Insufficient evidence (few hits / narrow spread) → the profile's GMD-absolute
+      thresholds, unchanged behaviour.
+    - Two-cluster (ghost/accent) parts → both thresholds at the midpoint of the
+      dominant velocity gap, so hits map to soft/hard only — no bogus medium.
+      A gap qualifies when it is at least as wide as the spread of either side it
+      separates and both sides hold a real share of the hits.
+    - Otherwise → relative tertiles (33rd/66th percentile of the file's own
+      velocities for that instrument).
+    Thresholds compare values, so equal velocities always share a tier (ties preserved).
+    """
+    v = np.asarray(velocities, dtype=float)
+    if len(v) < RELATIVE_TIER_MIN_HITS:
+        return absolute
+    p10, p90 = np.percentile(v, [10, 90])
+    if p90 - p10 < RELATIVE_TIER_MIN_SPREAD:
+        return absolute
+    vals = np.unique(v)
+    if len(vals) >= 2:
+        gaps = np.diff(vals)
+        gi = int(np.argmax(gaps))
+        gap = float(gaps[gi])
+        frac_lo = float((v <= vals[gi]).mean())
+        spread_lo = float(vals[gi] - vals[0])
+        spread_hi = float(vals[-1] - vals[gi + 1])
+        if (
+            gap >= RELATIVE_TIER_MIN_SPREAD
+            and gap >= TWO_CLUSTER_DOMINANCE * max(spread_lo, spread_hi)
+            and min(frac_lo, 1.0 - frac_lo) >= TWO_CLUSTER_MIN_FRAC
+        ):
+            boundary = float(vals[gi]) + gap / 2.0
+            return (boundary, boundary)
+    low, high = np.percentile(v, [33, 66])
+    return (float(low), float(high))
+
+
 def _lookup(
     profile: LoadedProfile,
     genre: str,
@@ -113,6 +165,7 @@ def _lookup(
     instrument_group: str,
     velocity: int,
     grid_pos: int | None = None,
+    thresholds: tuple[float, float] | None = None,
 ) -> tuple[BucketProfile | None, int | None, str | None]:
     """Return the best-matching BucketProfile, its fallback level (1-based), and the matched key.
 
@@ -120,8 +173,14 @@ def _lookup(
     unstratified+grid_pos before dropping to non-grid keys (offset=2).
     Unstratified instruments try instrument+grid_pos before non-grid keys (offset=1).
     When grid_pos is None, offset=0 and level numbering is identical to today.
+
+    ``thresholds`` overrides the profile's GMD-absolute tier thresholds — humanise()
+    passes the per-file relative thresholds from _file_tier_thresholds (spec B4), so
+    the tier selects both the velocity AND timing bucket by the user's own dynamics.
+    None (the default, and any direct caller) keeps the absolute behaviour.
     """
-    thresholds = profile.velocity_thresholds.get(instrument_group)
+    if thresholds is None:
+        thresholds = profile.velocity_thresholds.get(instrument_group)
     tier = _velocity_tier(velocity, thresholds) if thresholds else None
 
     if tier:
@@ -240,17 +299,31 @@ RESIDUAL_SHARE = 0.15          # β: the residual's share of a solo hit's timing
 COUPLED_RESIDUAL_FRAC = 0.15   # coupled-hit scatter as a fraction of its own centred sample …
 COUPLED_RESIDUAL_MS = 1.0      # … capped so each coupled member stays within ±1 ms of the shared nudge
 
+# Velocity drift (module 13 / spec B2). GMD kick velocity has genuine hit-to-hit
+# memory (train-split lag-1 r=+0.317 → PHI_VEL = r/(1-RESIDUAL_SHARE), see
+# scripts/calibrate_phi.py); snare/hats/ride/crash are ~white (r 0.07–0.16), so
+# i.i.d. sampling stays correct for them. Kick-only, and never shared across
+# instruments — a same-tick crash/snare keeps its own independent draw.
+# Fixed internal tuning, deliberately NOT a CLI knob.
+PHI_VEL = 0.37
+VEL_DRIFT_GROUPS = frozenset({"kick"})
+
 
 class GrooveDrift:
-    """One drummer's internal clock for the whole kit.
+    """AR(1) drift plus independent residual — the engine's slow-wander building block.
 
-    A shifted *solo* hit advances an AR(1) drift and adds a small independent residual, so the
-    kit's timing wanders together (correlated) instead of scattering hit-to-hit while the
-    per-hit spread is preserved: for a stationary bucket ``Var(step()) == Var(c)``. One instance
-    is shared across all tracks — hits are fed to it in absolute-time order regardless of which
-    track they live on. Constructed and used only when ``phi > 0`` — ``phi == 0`` is an exact
-    bypass in ``humanise()`` (no drift, no coupling), so this class never has to reproduce the
-    legacy path.
+    Each ``step`` advances an AR(1) drift on the mean-centred sample and adds a small
+    independent residual, so successive values wander together (correlated) instead of
+    scattering hit-to-hit while the per-hit spread is preserved: for a stationary bucket
+    ``Var(step()) == Var(c)``.
+
+    Used for two kit-wide clocks in ``humanise()``:
+    * the TIMING clock (``phi`` = --groove-tightness): advanced by every shifted *solo*
+      hit across all tracks in absolute-time order. Constructed only when ``phi > 0`` —
+      ``phi == 0`` is an exact timing bypass (no drift, no coupling), so this class
+      never has to reproduce the legacy timing path.
+    * the kick VELOCITY clock (``PHI_VEL``, spec B2): advanced by every kick hit whose
+      velocity is humanised. Kick-only — no cross-instrument sharing.
     """
 
     def __init__(self, phi: float, rng: Any = None) -> None:
@@ -299,6 +372,12 @@ def humanise(
     # perturbs the global sample stream — offset/velocity draws stay identical across phi.
     resid_seed = None if seed is None else (seed + 2_246_822_519) % (2 ** 32)
     resid_rng = np.random.RandomState(resid_seed)
+    # Velocity-drift RNG: a third independent stream (spec B2). Keeping it separate from
+    # both the global sample stream and resid_rng preserves the two existing contracts —
+    # samples identical across phi, and timing identical across timing_only/default —
+    # while the kick velocity clock draws its own residuals.
+    vel_seed = None if seed is None else (seed + 1_779_033_703) % (2 ** 32)
+    vel_drift = GrooveDrift(PHI_VEL, np.random.RandomState(vel_seed))
 
     mid = mido.MidiFile(str(input_path))
     if mid.type == 2:
@@ -315,6 +394,40 @@ def humanise(
     tempo_map = build_tempo_map(mid)
     ppq = mid.ticks_per_beat
     n_tracks = len(mid.tracks)
+
+    # B4: per-file relative tier thresholds from the user's own velocities, for every
+    # instrument the profile stratifies. Falls back to the profile's GMD-absolute
+    # thresholds inside _file_tier_thresholds when evidence is insufficient.
+    vels_by_group: dict[str, list[int]] = defaultdict(list)
+    for track in mid.tracks:
+        for msg in track:
+            if (
+                msg.type == "note_on"
+                and msg.velocity > 0
+                and hasattr(msg, "note")
+                and (all_channels or msg.channel == DRUM_CHANNEL)
+                and msg.note in TD11_TO_GROUP
+            ):
+                vels_by_group[TD11_TO_GROUP[msg.note]].append(msg.velocity)
+    file_thresholds: dict[str, tuple[float, float]] = {
+        g: _file_tier_thresholds(vs, profiles.velocity_thresholds[g])
+        for g, vs in vels_by_group.items()
+        if g in profiles.velocity_thresholds
+    }
+
+    def _new_velocity(group: str, bucket: BucketProfile, vel_delta_raw: float,
+                      velocity: int) -> int:
+        # B1: the sampled delta perturbs the user's own dynamics (shape unchanged).
+        # B2: kick-only velocity drift. Centre on the bucket's own vel_delta mean so a
+        # legacy (non-residual) profile's bias is applied statically and never amplified
+        # — the same guard the timing clock uses. Other instruments: i.i.d. sample.
+        if group in VEL_DRIFT_GROUPS:
+            mu_v = float(bucket.vel_deltas.mean())
+            fluct_v = vel_drift.step(vel_delta_raw - mu_v, float(bucket.vel_deltas.std()))
+            vel_delta = fluct_v + mu_v
+        else:
+            vel_delta = vel_delta_raw
+        return max(1, min(127, round(velocity + vel_delta * intensity)))
 
     # ---- Pass 1 (per track): absolute ticks, will_shift, windowing bounds ----
     tracks_abs: list[list[tuple[int, mido.Message]]] = []
@@ -349,6 +462,7 @@ def humanise(
                     _lookup(
                         profiles, genre, beat_type, TD11_TO_GROUP[msg.note],
                         msg.velocity, grid_pos=gp,
+                        thresholds=file_thresholds.get(TD11_TO_GROUP[msg.note]),
                     )[0] is not None  # only first element needed here
                 )
             will_shift.append(shiftable)
@@ -413,11 +527,14 @@ def humanise(
             grid_tick = quantise_to_grid(abs_t, ppq, grid)
             grid_pos = (grid_position_in_bar(grid_tick, ppq)
                         if use_grid_pos else None)
-            bucket, level, key_used = _lookup(profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos)
+            bucket, level, key_used = _lookup(
+                profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos,
+                thresholds=file_thresholds.get(group),
+            )
             offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
             if velocity_only:
-                new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
+                new_vel = _new_velocity(group, bucket, vel_delta_raw, msg.velocity)
                 out_abs[ti].append((abs_t, msg.copy(velocity=new_vel)))
                 prev_note_on_abs[ti] = abs_t
                 prev_note_on_orig_abs[ti] = abs_t
@@ -460,9 +577,9 @@ def humanise(
                 chord_tick = abs_t
                 is_chord_anchor = True
             if timing_only:
-                new_vel = msg.velocity
+                new_vel = msg.velocity   # velocity untouched; the vel clock does not advance
             else:
-                new_vel = max(1, min(127, round(msg.velocity + vel_delta_raw * intensity)))
+                new_vel = _new_velocity(group, bucket, vel_delta_raw, msg.velocity)
 
             if abs_t == prev_note_on_orig_abs[ti]:
                 # Chord member (same original tick as the previous note_on on this track):

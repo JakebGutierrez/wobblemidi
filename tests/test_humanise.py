@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import math
 import tempfile
 from pathlib import Path
 
@@ -14,7 +13,6 @@ import pytest
 from pocketmidi.humanise import (
     COUPLED_RESIDUAL_MS,
     EPSILON_TICKS,
-    RESIDUAL_SHARE,
     BucketProfile,
     GrooveDrift,
     LoadedProfile,
@@ -1469,28 +1467,38 @@ class TestGrooveDrift:
             out = np.array([g.step(x, 4.0) for x in c])
             assert out.var() == pytest.approx(c.var(), rel=0.06)
 
-    def test_lag1_autocorr_is_one_minus_beta_times_phi(self):
-        # The independent residual dilutes the drift's autocorrelation (phi) by (1-beta).
+    # NOTE (O5): the exact-constant locks previously here — output autocorr ==
+    # (1-RESIDUAL_SHARE)*phi and the AR-recursion/sqrt(1-beta) arithmetic — were
+    # retired with the module-13 rebuild and replaced by the invariants below
+    # (monotonicity, variance budget, reproducibility, phi=0 bypass, velocity
+    # de-bias). Exact recursion constants are implementation detail, not contract.
+
+    def test_autocorr_monotone_in_phi(self):
+        # More groove-tightness → more hit-to-hit timing memory. The exact value is
+        # tuning; the ordering is the contract.
         rng = np.random.RandomState(1)
         c = rng.normal(0.0, 4.0, 60000)
-        for phi in (0.3, 0.5, 0.8):
+        acs = []
+        for phi in (0.1, 0.4, 0.8):
             np.random.seed(7)
             g = GrooveDrift(phi)
             out = np.array([g.step(x, 4.0) for x in c])
-            ac = float(np.corrcoef(out[:-1], out[1:])[0, 1])
-            assert ac == pytest.approx((1.0 - RESIDUAL_SHARE) * phi, abs=0.03)
+            acs.append(float(np.corrcoef(out[:-1], out[1:])[0, 1]))
+        assert acs[0] < acs[1] < acs[2]
+        assert acs[0] > 0.02          # even small phi leaves some memory
+        assert acs[2] < 0.85          # residual keeps it strictly below 1
 
-    def test_ar_recursion_exact_with_zero_sigma(self):
-        # sigma=0 removes residual randomness → deterministic; verify the AR recursion and
-        # the sqrt(1-beta) drift weight exactly (fails for a wrong constant).
-        phi = 0.5
-        g = GrooveDrift(phi)
-        innov = math.sqrt(1 - phi**2)
-        wd = math.sqrt(1 - RESIDUAL_SHARE)
-        d = 0.0
-        for c in (10.0, -4.0, 7.0, 0.0):
-            d = phi * d + innov * c
-            assert g.step(c, 0.0) == pytest.approx(wd * d)
+    def test_deterministic_and_seed_dependent(self):
+        # Same rng seed → identical step sequence; different seed → different residuals.
+        c = [10.0, -4.0, 7.0, 0.0, 3.0]
+        g1 = GrooveDrift(0.5, np.random.RandomState(9))
+        g2 = GrooveDrift(0.5, np.random.RandomState(9))
+        g3 = GrooveDrift(0.5, np.random.RandomState(10))
+        s1 = [g1.step(x, 2.0) for x in c]
+        s2 = [g2.step(x, 2.0) for x in c]
+        s3 = [g3.step(x, 2.0) for x in c]
+        assert s1 == s2
+        assert s1 != s3
 
     def test_autocorr_zero_at_tiny_phi(self):
         rng = np.random.RandomState(2)
@@ -1791,3 +1799,303 @@ class TestGrooveDriftInteractions:
         profs = load_profile(_write_profile(tmp_path, _profile_dict()))
         with pytest.raises(ValueError, match="phi"):
             humanise(inp, out, profs, phi=bad_phi)
+
+
+# ---------------------------------------------------------------------------
+# TestEngineTimingInvariants — O5 replacements measured through humanise()
+# ---------------------------------------------------------------------------
+
+class TestEngineTimingInvariants:
+    """phi=0 bypass, autocorr monotone in phi, and the total-variance budget,
+    asserted on actual engine output rather than on recursion constants."""
+
+    PPQ = 480
+    TEMPO_US = 500_000  # 120 BPM → 1 tick ≈ 1.0417 ms
+
+    def _kick_line(self, tmp_path, n):
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        prev = 0
+        for i in range(n):
+            t = i * self.PPQ
+            tr.append(mido.Message("note_on",  channel=9, note=36, velocity=90, time=t - prev))
+            tr.append(mido.Message("note_off", channel=9, note=36, velocity=0, time=200))
+            prev = t + 200
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "kicks.mid"; mid.save(str(p))
+        return p
+
+    def _profile(self):
+        # meanless, spread-y offsets (±20 ms ≈ ±19 ticks: far inside every window)
+        return LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(
+                np.array([-20.0, -10.0, 0.0, 10.0, 20.0]), np.zeros(5), None)},
+            velocity_thresholds={},
+        )
+
+    def _offsets_ticks(self, path):
+        mid = mido.MidiFile(str(path))
+        t = 0; offs = []
+        for msg in mid.tracks[0]:
+            t += msg.time
+            if msg.type == "note_on" and msg.velocity > 0:
+                grid = round(t / self.PPQ) * self.PPQ
+                offs.append(t - grid)
+        return np.array(offs, dtype=float)
+
+    def _run(self, tmp_path, phi, n=1200, seed=11):
+        inp = self._kick_line(tmp_path, n)
+        out = tmp_path / f"out_phi{phi}.mid"
+        humanise(inp, out, self._profile(), seed=seed, phi=phi, timing_only=True)
+        return self._offsets_ticks(out)
+
+    def test_phi0_bypass_no_timing_memory(self, tmp_path):
+        # phi=0: drift inert — successive offsets are independent draws.
+        offs = self._run(tmp_path, phi=0.0)
+        r = float(np.corrcoef(offs[:-1], offs[1:])[0, 1])
+        assert abs(r) < 0.06
+
+    def test_autocorr_monotone_in_phi_through_engine(self, tmp_path):
+        rs = []
+        for phi in (0.0, 0.4, 0.8):
+            offs = self._run(tmp_path, phi=phi)
+            rs.append(float(np.corrcoef(offs[:-1], offs[1:])[0, 1]))
+        assert rs[0] < rs[1] < rs[2]
+        assert rs[1] > 0.15   # default phi leaves visible pocket memory
+
+    def test_total_variance_budget_across_phi(self, tmp_path):
+        # Drift redistributes timing variance over time; it must not add or remove it.
+        # Same seed → identical sample draws across phi, so this comparison is clean.
+        sd0 = self._run(tmp_path, phi=0.0).std()
+        sd5 = self._run(tmp_path, phi=0.5).std()
+        assert sd5 == pytest.approx(sd0, rel=0.12)
+
+
+# ---------------------------------------------------------------------------
+# Module 13 (spec B2) — kick-only velocity drift
+# ---------------------------------------------------------------------------
+
+class TestVelDrift:
+    PPQ = 480
+    TEMPO_US = 500_000
+
+    def _line(self, tmp_path, note, n, vel=90):
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        prev = 0
+        for i in range(n):
+            t = i * self.PPQ
+            tr.append(mido.Message("note_on",  channel=9, note=note, velocity=vel, time=t - prev))
+            tr.append(mido.Message("note_off", channel=9, note=note, velocity=0, time=200))
+            prev = t + 200
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / f"line{note}.mid"; mid.save(str(p))
+        return p
+
+    def _out_vels(self, path, note):
+        mid = mido.MidiFile(str(path))
+        return np.array([m.velocity for m in mid.tracks[0]
+                         if m.type == "note_on" and m.velocity > 0 and m.note == note],
+                        dtype=float)
+
+    def _spready_profile(self, key):
+        # zero-mean spread-y vel_deltas, zero offsets (timing never interferes)
+        return LoadedProfile(
+            buckets={key: BucketProfile(np.zeros(5),
+                                        np.array([-12.0, -6.0, 0.0, 6.0, 12.0]), None)},
+            velocity_thresholds={},
+        )
+
+    def test_kick_velocities_drift_snare_stays_white(self, tmp_path):
+        # B2: kick gets the AR(1) velocity clock; snare (measured ~white) must not.
+        n = 2000
+        k_out, s_out = tmp_path / "k.mid", tmp_path / "s.mid"
+        humanise(self._line(tmp_path, 36, n), k_out,
+                 self._spready_profile("rock|beat|kick"), seed=0, velocity_only=True)
+        humanise(self._line(tmp_path, 38, n), s_out,
+                 self._spready_profile("rock|beat|snare"), seed=0, velocity_only=True)
+        kv = self._out_vels(k_out, 36)
+        sv = self._out_vels(s_out, 38)
+        r_kick = float(np.corrcoef(kv[:-1], kv[1:])[0, 1])
+        r_snare = float(np.corrcoef(sv[:-1], sv[1:])[0, 1])
+        assert r_kick > 0.15, f"kick velocity shows no drift (r={r_kick:.3f})"
+        assert abs(r_snare) < 0.08, f"snare velocity is not i.i.d. (r={r_snare:.3f})"
+
+    def test_kick_velocity_variance_preserved(self, tmp_path):
+        # The drift split redistributes velocity variance; it must not change the spread.
+        out = tmp_path / "o.mid"
+        humanise(self._line(tmp_path, 36, 4000), out,
+                 self._spready_profile("rock|beat|kick"), seed=1, velocity_only=True)
+        kv = self._out_vels(out, 36) - 90.0
+        raw_sd = float(np.array([-12.0, -6.0, 0.0, 6.0, 12.0]).std())
+        assert float(kv.std()) == pytest.approx(raw_sd, rel=0.15)
+
+    def test_legacy_biased_bucket_applied_statically(self, tmp_path):
+        # Old-schema bucket with vel_delta mean +10 (median-based deltas): the bias must
+        # come through as a static +10 level shift, never amplified by the AR recursion —
+        # same backward-compat guard as the timing clock's mean-centring.
+        prof = LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(
+                np.zeros(5), np.array([6.0, 8.0, 10.0, 12.0, 14.0]), None)},
+            velocity_thresholds={},
+        )
+        out = tmp_path / "o.mid"
+        humanise(self._line(tmp_path, 36, 2000), out, prof, seed=2, velocity_only=True)
+        assert float(self._out_vels(out, 36).mean()) == pytest.approx(100.0, abs=1.0)
+
+    def test_timing_identical_across_velocity_processing(self, tmp_path):
+        # The velocity clock draws from its own RNG stream, so toggling velocity
+        # processing must not change timing for the same seed (module-7 contract).
+        prof = LoadedProfile(
+            buckets={"rock|beat|kick": BucketProfile(
+                np.array([-15.0, -5.0, 5.0, 15.0, 0.0]),
+                np.array([-12.0, -6.0, 0.0, 6.0, 12.0]), None)},
+            velocity_thresholds={},
+        )
+        inp = self._line(tmp_path, 36, 64)
+        a, b = tmp_path / "a.mid", tmp_path / "b.mid"
+        humanise(inp, a, prof, seed=5, timing_only=True)
+        humanise(inp, b, prof, seed=5)
+
+        def ticks(p):
+            mid = mido.MidiFile(str(p)); t = 0; out = []
+            for msg in mid.tracks[0]:
+                t += msg.time
+                if msg.type == "note_on" and msg.velocity > 0:
+                    out.append(t)
+            return out
+
+        assert ticks(a) == ticks(b)
+
+
+# ---------------------------------------------------------------------------
+# Module 13 (spec B4) — relative velocity tiering
+# ---------------------------------------------------------------------------
+
+from pocketmidi.humanise import (  # noqa: E402  (grouped with the tests that use them)
+    RELATIVE_TIER_MIN_HITS,
+    RELATIVE_TIER_MIN_SPREAD,
+    _file_tier_thresholds,
+)
+
+
+class TestRelativeTierThresholds:
+    ABSOLUTE = (57.0, 80.0)   # GMD-ish kick tertiles
+
+    def test_too_few_hits_falls_back_to_absolute(self):
+        v = [40, 100] * ((RELATIVE_TIER_MIN_HITS - 1) // 2)
+        assert _file_tier_thresholds(v, self.ABSOLUTE) == self.ABSOLUTE
+
+    def test_narrow_spread_falls_back_to_absolute(self):
+        v = [90, 92, 94, 95, 96, 97, 99, 100] * 4   # p90-p10 < 12
+        assert _file_tier_thresholds(v, self.ABSOLUTE) == self.ABSOLUTE
+
+    def test_all_one_velocity_falls_back_to_absolute(self):
+        assert _file_tier_thresholds([88] * 32, self.ABSOLUTE) == self.ABSOLUTE
+
+    def test_continuous_spread_gives_relative_tertiles(self):
+        v = list(range(60, 108, 3)) * 3   # even spread, no dominant gap
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert (low, high) != self.ABSOLUTE
+        assert 60 < low < high < 108
+        np.testing.assert_allclose([low, high], np.percentile(v, [33, 66]))
+
+    def test_two_cluster_maps_soft_hard_no_medium(self):
+        # ghost/accent part: 30% ghosts at 25-30, 70% accents at 95-105
+        v = [25, 30] * 6 + [95, 100, 105] * 10
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert low == high   # collapsed boundary → medium is unreachable
+        assert 30 < low < 95
+        assert _velocity_tier(30, (low, high)) == "soft"
+        assert _velocity_tier(95, (low, high)) == "hard"
+
+    def test_two_level_palette_is_two_cluster(self):
+        # exactly two programmed values (2-level palette) → soft/hard split
+        v = [60] * 10 + [100] * 10
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert low == high == pytest.approx(80.0)
+
+    def test_tiny_minority_cluster_not_two_cluster(self):
+        # one stray accent in 40 hits (<15%) must not force a two-cluster split
+        v = [70 + (i % 5) * 4 for i in range(39)] + [120]
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert low != high   # tertile path
+
+    def test_ties_share_a_tier(self):
+        v = [40] * 10 + [77] * 10 + [110] * 10
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        tiers = {x: _velocity_tier(x, (low, high)) for x in (40, 77, 110)}
+        assert len(set(tiers.values())) == len(tiers)   # distinct values, distinct tiers
+
+    def test_spread_gate_boundary(self):
+        # exactly at the p90-p10 threshold → relative tiering allowed
+        v = ([80] * 10 + [80 + RELATIVE_TIER_MIN_SPREAD] * 10)
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert low == high   # two-cluster relative split, not absolute
+
+
+class TestRelativeTieringIntegration:
+    PPQ = 480
+
+    def test_relative_tiers_route_to_different_buckets(self, tmp_path):
+        """A part whose velocities all sit inside ONE absolute tier must still
+        route its low cluster to soft and high cluster to hard (tier-collapse fix).
+        Bucket vel_deltas differ per tier, so output velocities reveal the routing."""
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+        prev = 0
+        vels = [60, 100] * 8   # two-cluster, 16 hits, spread 40
+        for i, v in enumerate(vels):
+            t = i * self.PPQ
+            tr.append(mido.Message("note_on",  channel=9, note=38, velocity=v, time=t - prev))
+            tr.append(mido.Message("note_off", channel=9, note=38, velocity=0, time=200))
+            prev = t + 200
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "in.mid"; mid.save(str(inp))
+
+        # ABSOLUTE thresholds put EVERY hit (60 and 100) in "soft" (both < 110).
+        # Relative tiering must split them 60→soft, 100→hard.
+        prof = LoadedProfile(
+            buckets={
+                "rock|beat|snare|soft": BucketProfile(np.zeros(1), np.array([-20.0]), None),
+                "rock|beat|snare|hard": BucketProfile(np.zeros(1), np.array([+20.0]), None),
+            },
+            velocity_thresholds={"snare": (110.0, 120.0)},
+        )
+        out = tmp_path / "o.mid"
+        humanise(inp, out, prof, seed=0, velocity_only=True)
+
+        got = [m.velocity for m in mido.MidiFile(str(out)).tracks[0]
+               if m.type == "note_on" and m.velocity > 0]
+        assert got == [40, 120] * 8   # 60-20 (soft bucket) / 100+20 (hard bucket)
+
+    def test_absolute_fallback_when_no_evidence(self, tmp_path):
+        """Same setup but all hits at one velocity → absolute thresholds apply
+        (everything routes to the absolute tier for velocity 100: 'soft')."""
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+        prev = 0
+        for i in range(16):
+            t = i * self.PPQ
+            tr.append(mido.Message("note_on",  channel=9, note=38, velocity=100, time=t - prev))
+            tr.append(mido.Message("note_off", channel=9, note=38, velocity=0, time=200))
+            prev = t + 200
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "in.mid"; mid.save(str(inp))
+
+        prof = LoadedProfile(
+            buckets={
+                "rock|beat|snare|soft": BucketProfile(np.zeros(1), np.array([-20.0]), None),
+                "rock|beat|snare|hard": BucketProfile(np.zeros(1), np.array([+20.0]), None),
+            },
+            velocity_thresholds={"snare": (110.0, 120.0)},
+        )
+        out = tmp_path / "o.mid"
+        humanise(inp, out, prof, seed=0, velocity_only=True)
+        got = [m.velocity for m in mido.MidiFile(str(out)).tracks[0]
+               if m.type == "note_on" and m.velocity > 0]
+        assert got == [80] * 16   # all soft: 100 - 20
