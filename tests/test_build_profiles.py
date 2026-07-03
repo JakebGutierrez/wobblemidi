@@ -1,3 +1,4 @@
+import json
 import sys
 from pathlib import Path
 
@@ -253,6 +254,28 @@ def test_residuals_do_not_leak_across_takes():
     assert abs(np.mean([h["vel_delta"] for h in hits if h["take"] == "quiet"])) < 1e-9
     # residual magnitudes reflect within-take variation (±5), not the 40-unit take gap
     assert all(abs(h["vel_delta"]) < 10 for h in hits)
+
+
+# ── shipped-profile schema regression ────────────────────────────────────────
+
+def test_shipped_profile_is_schema_v2():
+    """The bundled rock.json must be a v2-builder artifact — guards against a
+    stale or old-schema profile ever shipping again (module-13 ship contract)."""
+    shipped = Path(__file__).parent.parent / "pocketmidi" / "profiles" / "rock.json"
+    with shipped.open() as f:
+        raw = json.load(f)
+    meta = raw["_meta"]
+    assert meta["schema_version"] == 2
+    assert meta["tier_residual_groups"] == ["snare"]
+    bucket_keys = {k for k in raw if k != "_meta"}
+    # the new per-bucket _meta maps cover every emitted bucket
+    assert set(meta["bucket_vel_delta_means"]) == bucket_keys
+    assert set(meta["vel_sigma_within"]) == bucket_keys
+    assert set(meta["bucket_offset_means"]) == bucket_keys
+    # guardrail 1 holds in the shipped artifact: buckets are de-biased to ~0
+    for key in ("global|snare", "global|kick", "global|hihat_closed"):
+        deltas = np.array(raw[key])[:, 1]
+        assert abs(float(deltas.mean())) < 1e-9, f"{key} not de-biased"
 
 
 # ── build_profile_output end-to-end: schema v2 _meta contract ────────────────
