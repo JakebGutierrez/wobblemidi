@@ -168,13 +168,62 @@ def _raw_hit(take, pos, instr, vel):
 
 
 def test_residual_is_deviation_from_cell_mean():
-    """Dense cells: vel_delta ≈ velocity − (take, pos, instrument) cell mean."""
+    """Dense cells: vel_delta ≈ velocity − (take, pos, instrument) cell mean.
+    (hihat: not tier-conditioned, so this locks the base A2 path.)"""
     # one cell with many hits alternating 70/90 (mean 80); take-level mean also 80,
     # so shrinkage is a no-op and residuals must be exactly ±10
-    hits = [_raw_hit("t1", 0, "snare", 70 if i % 2 else 90) for i in range(200)]
+    hits = [_raw_hit("t1", 0, "hihat_closed", 70 if i % 2 else 90) for i in range(200)]
     residualise_velocities(hits)
     deltas = {h["vel_delta"] for h in hits}
     assert deltas == {10.0, -10.0}
+
+
+# ── addendum Fix 1: snare tier-residualisation ───────────────────────────────
+
+def test_snare_roles_get_separate_baselines():
+    """Ghost/backbeat alternating at ONE position across bars: the tier-agnostic
+    mean (65) would give residuals ±35 — the snare bug. With tier conditioning
+    each role centres near itself, so residuals collapse. The identical hihat
+    part keeps the blended behaviour (snare-only change)."""
+    snare = [_raw_hit("t1", 4, "snare", 30 if i % 2 else 100) for i in range(64)]
+    hat = [_raw_hit("t1", 4, "hihat_closed", 30 if i % 2 else 100) for i in range(64)]
+    hits = snare + hat
+    residualise_velocities(hits)
+    snare_d = [abs(h["vel_delta"]) for h in hits if h["instrument_group"] == "snare"]
+    hat_d = [abs(h["vel_delta"]) for h in hits if h["instrument_group"] == "hihat_closed"]
+    assert max(snare_d) < 6, f"snare residuals still blended: max {max(snare_d):.1f}"
+    assert min(hat_d) > 30, "hihat must keep the tier-agnostic baseline"
+
+
+def test_snare_roles_are_relative_not_absolute():
+    """Ghosts 60 / backbeats 100 both sit in the SAME absolute tier (51..111 =
+    'medium'), so absolute tiers would blend them. The relative per-take role
+    convention (same as runtime B4) must still separate them."""
+    hits = [_raw_hit("t1", 4, "snare", 60 if i % 2 else 100) for i in range(64)]
+    residualise_velocities(hits, velocity_thresholds={"snare": (51.0, 111.0)})
+    assert max(abs(h["vel_delta"]) for h in hits) < 6
+
+
+def test_snare_sparse_tier_cell_shrinks_tier_preserving():
+    """A lone ghost at a new position must shrink toward the (take, snare, soft)
+    tier mean (≈30), NOT toward the blended take mean (≈57) — the Codex
+    tier-preserving fallback. Straight-to-blended would leave |residual| ≈ 23."""
+    hits = [_raw_hit("t1", p, "snare", 30) for p in range(1, 9) for _ in range(3)]
+    hits += [_raw_hit("t1", 12, "snare", 100) for _ in range(16)]
+    lone = _raw_hit("t1", 0, "snare", 30)
+    hits.append(lone)
+    residualise_velocities(hits)
+    assert abs(lone["vel_delta"]) < 10, (
+        f"lone ghost fell back to a blended mean: delta {lone['vel_delta']:.1f}"
+    )
+
+
+def test_snare_single_level_part_unchanged_behaviour():
+    """All snare hits at one velocity: no role evidence and no absolute
+    thresholds → single shared role → identical to the tier-agnostic path."""
+    hits = [_raw_hit("t1", p % 4, "snare", 90) for p in range(40)]
+    residualise_velocities(hits)
+    assert all(h["vel_delta"] == 0.0 for h in hits)
 
 
 def test_sparse_cell_residual_not_fake_zero():
@@ -223,6 +272,7 @@ def test_build_profile_output_schema_v2():
 
     meta = output["_meta"]
     assert meta["schema_version"] == 2
+    assert meta["tier_residual_groups"] == ["snare"]
     assert "kick" in meta["velocity_thresholds"]
     assert set(meta["bucket_vel_delta_means"]) == set(meta["vel_sigma_within"])
     assert written > 0

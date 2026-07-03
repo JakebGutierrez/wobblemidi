@@ -22,6 +22,8 @@ import pandas as pd
 # Allow running from the repo root without installing the package.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from pocketmidi.humanise import _file_tier_thresholds
+from pocketmidi.humanise import _velocity_tier as _role_tier
 from pocketmidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
@@ -55,38 +57,99 @@ def _velocity_tier(velocity: float, thresholds: tuple[float, float]) -> str:
 # definition (delta vs bucket median) sampled that structure as noise. The residual
 # keeps only within-performance imperfection (velocity sigma roughly halves).
 #
+# Snare (addendum Fix 1): the baseline cell also conditions on the hit's velocity
+# TIER — at one grid position snare alternates ghost/backbeat across bars, so the
+# tier-agnostic cell mean lands BETWEEN the roles and the residual re-absorbs the
+# accent structure it was meant to strip. Tier is a per-take ROLE label from the
+# same relative convention the runtime uses (_file_tier_thresholds / B4), with the
+# GMD-absolute thresholds as the per-take evidence fallback — not an
+# absolute-velocity promise. Snare only: measured ghost/accent-at-one-position
+# structure justifies it there; do not blanket-apply without measuring.
+#
 # Guardrail 2 — sparse-cell shrinkage: an n=1 cell's mean equals the hit itself,
 # making its residual exactly 0 (fake zero-noise crashes/fills). Every cell mean is
-# shrunk toward the broader (take, instrument) mean with a pseudo-count:
-#     shrunk = (n * cell_mean + SHRINKAGE_K * take_instr_mean) / (n + SHRINKAGE_K)
+# shrunk toward a broader mean with a pseudo-count:
+#     shrunk = (n * cell_mean + SHRINKAGE_K * broader_mean) / (n + SHRINKAGE_K)
 # SHRINKAGE_K = 5 is the threshold in effect: cells with n ≲ 5 are materially shrunk
-# (an n=1 cell keeps 5/6 of its deviation from the take/instrument level as its
-# residual); cells with n ≫ 5 are essentially untouched.
+# (an n=1 cell keeps 5/6 of its deviation from the broader level as its residual);
+# cells with n ≫ 5 are essentially untouched. For tier-conditioned instruments the
+# chain is TIER-PRESERVING first (Codex): (take, pos, inst, tier) shrinks toward
+# (take, inst, tier), which itself shrinks toward (take, inst) — never straight to
+# the blended (take, pos, inst) mean that caused the snare bug.
 SHRINKAGE_K = 5
+TIER_RESIDUAL_GROUPS = frozenset({"snare"})
+
+_ROLE_SENTINEL = (-1.0, -1.0)
 
 
-def residualise_velocities(raw_hits: list[dict]) -> None:
+def _assign_roles(raw_hits: list[dict], velocity_thresholds: dict | None) -> None:
+    """Attach a per-hit "_role" label for TIER_RESIDUAL_GROUPS instruments.
+
+    Labels come from the take's own velocities via the engine's relative-tier
+    convention; a take without enough evidence falls back to the GMD-absolute
+    thresholds (same as runtime B4), or to a single shared role if none exist.
+    """
+    by_take_instr: dict[tuple, list[int]] = defaultdict(list)
+    for i, h in enumerate(raw_hits):
+        if h["instrument_group"] in TIER_RESIDUAL_GROUPS:
+            by_take_instr[(h["take"], h["instrument_group"])].append(i)
+
+    for (take, instr), idxs in by_take_instr.items():
+        vels = np.array([raw_hits[i]["velocity"] for i in idxs], dtype=float)
+        absolute = (velocity_thresholds or {}).get(instr, _ROLE_SENTINEL)
+        low, high = _file_tier_thresholds(vels, tuple(absolute))
+        if (low, high) == _ROLE_SENTINEL:
+            for i in idxs:
+                raw_hits[i]["_role"] = "all"
+        else:
+            for i in idxs:
+                raw_hits[i]["_role"] = _role_tier(raw_hits[i]["velocity"], (low, high))
+
+
+def residualise_velocities(
+    raw_hits: list[dict], velocity_thresholds: dict | None = None
+) -> None:
     """Annotate every hit with its vel_delta (in place) per the A2 definition above.
 
     Requires each hit to carry "take", "grid_pos", "instrument_group", "velocity".
+    *velocity_thresholds* (the GMD-absolute tier thresholds) seed the per-take role
+    fallback for TIER_RESIDUAL_GROUPS instruments.
     """
-    cell_vels: dict[tuple, list[float]] = defaultdict(list)
+    _assign_roles(raw_hits, velocity_thresholds)
+
+    cell_vels: dict[tuple, list[float]] = defaultdict(list)     # (take, pos, inst, role)
+    tier_vels: dict[tuple, list[float]] = defaultdict(list)     # (take, inst, role)
     take_instr_vels: dict[tuple, list[float]] = defaultdict(list)
     for h in raw_hits:
-        cell_vels[(h["take"], h["grid_pos"], h["instrument_group"])].append(h["velocity"])
+        role = h.get("_role", "")
+        cell_vels[(h["take"], h["grid_pos"], h["instrument_group"], role)].append(h["velocity"])
+        if role:
+            tier_vels[(h["take"], h["instrument_group"], role)].append(h["velocity"])
         take_instr_vels[(h["take"], h["instrument_group"])].append(h["velocity"])
 
-    shrunk_mean: dict[tuple, float] = {}
-    for (take, pos, instr), vels in cell_vels.items():
+    # tier-preserving intermediate: (take, inst, tier) shrunk toward (take, inst)
+    shrunk_tier: dict[tuple, float] = {}
+    for (take, instr, role), vels in tier_vels.items():
         broad = float(np.mean(take_instr_vels[(take, instr)]))
         n = len(vels)
-        shrunk_mean[(take, pos, instr)] = (
+        shrunk_tier[(take, instr, role)] = (
+            n * float(np.mean(vels)) + SHRINKAGE_K * broad
+        ) / (n + SHRINKAGE_K)
+
+    shrunk_mean: dict[tuple, float] = {}
+    for (take, pos, instr, role), vels in cell_vels.items():
+        if role:
+            broad = shrunk_tier[(take, instr, role)]   # same-tier broader mean, never blended
+        else:
+            broad = float(np.mean(take_instr_vels[(take, instr)]))
+        n = len(vels)
+        shrunk_mean[(take, pos, instr, role)] = (
             n * float(np.mean(vels)) + SHRINKAGE_K * broad
         ) / (n + SHRINKAGE_K)
 
     for h in raw_hits:
         h["vel_delta"] = h["velocity"] - shrunk_mean[
-            (h["take"], h["grid_pos"], h["instrument_group"])
+            (h["take"], h["grid_pos"], h["instrument_group"], h.get("_role", ""))
         ]
 
 
@@ -267,12 +330,10 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
     Returns (output, written, skipped_buckets) where *output* is the JSON-ready
     profile dict including the ``_meta`` block.
     """
-    # A2: annotate every hit with its velocity residual before any bucketing.
-    residualise_velocities(raw_hits)
-
     # ------------------------------------------------------------------
     # Compute velocity tertile thresholds for kick and snare
-    # (from post-filter raw_hits so boundaries match the retained data)
+    # (from post-filter raw_hits so boundaries match the retained data;
+    # computed BEFORE residualising — they seed the per-take role fallback)
     # ------------------------------------------------------------------
     all_by_instrument: dict[str, list[float]] = defaultdict(list)
     for h in raw_hits:
@@ -284,6 +345,10 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
         low, high = np.percentile(vels, [33, 66])
         velocity_thresholds[instr] = (float(low), float(high))
         click.echo(f"  {instr} velocity tertiles: soft<{low:.1f}, medium<{high:.1f}, hard>={high:.1f}")
+
+    # A2 (+ addendum Fix 1): annotate every hit with its velocity residual
+    # before any bucketing.
+    residualise_velocities(raw_hits, velocity_thresholds)
 
     # ------------------------------------------------------------------
     # Per-style buckets
@@ -336,9 +401,11 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
         "_meta": {
             "schema_version": 2,
             "vel_delta_definition": (
-                "velocity residual vs shrunk (take, grid_position, instrument) mean; "
-                "each emitted bucket de-biased to mean 0"
+                "velocity residual vs shrunk (take, grid_position, instrument[, tier]) "
+                "mean; tier conditioning for tier_residual_groups (relative per-take "
+                "roles); each emitted bucket de-biased to mean 0"
             ),
+            "tier_residual_groups": sorted(TIER_RESIDUAL_GROUPS),
             "velocity_thresholds": {
                 instr: list(thresholds)
                 for instr, thresholds in velocity_thresholds.items()
