@@ -21,6 +21,7 @@ const bridge = (() => {
     ready,
     ping: () => call("ping"),
     getStatus: () => call("get_status"),
+    autoload: () => call("autoload"),
     openMidi: () => call("open_midi"),
     humanise: (params) => call("humanise", params),
     reroll: (params) => call("reroll", params),

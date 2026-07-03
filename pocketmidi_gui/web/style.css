@@ -155,6 +155,22 @@ html, body {
 
 #minimap { width: 100%; height: 100%; display: block; }
 
+#screen-hints {
+  align-self: flex-end;
+  font-size: 8px;
+  letter-spacing: 1.5px;
+  color: var(--label-dim);
+  opacity: 0.7;
+  padding-right: 2px;
+}
+
+@keyframes pad-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(0.7); }
+}
+
+.pad.busy { animation: pad-pulse 0.9s ease-in-out infinite; cursor: wait; }
+
 /* ---------- controls ---------- */
 
 #controls {

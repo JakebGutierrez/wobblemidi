@@ -8,6 +8,7 @@ bridge.js is the only file that knows about window.pywebview.
 
 from __future__ import annotations
 
+import sys
 import threading
 from pathlib import Path
 
@@ -29,10 +30,11 @@ class Api:
     the window appears immediately; API calls block on readiness.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, autoload_path: str | None = None) -> None:
         self._window: webview.Window | None = None
         self._session: adapter.Session | None = None
         self._session_error: str | None = None
+        self._autoload_path = autoload_path
         self._ready = threading.Event()
         threading.Thread(target=self._init_session, daemon=True).start()
 
@@ -62,6 +64,16 @@ class Api:
         if self._session_error:
             return {"ok": False, "error": self._session_error}
         return {"ok": True}
+
+    def autoload(self) -> dict:
+        """Load the file given on the command line (pocketmidi-gui song.mid), once."""
+        path, self._autoload_path = self._autoload_path, None
+        if not path:
+            return {"ok": False, "none": True}
+        session = self._get_session()
+        if session is None:
+            return {"ok": False, "error": self._session_error}
+        return session.load(path)
 
     def open_midi(self) -> dict:
         session = self._get_session()
@@ -107,7 +119,8 @@ class Api:
 
 
 def main() -> None:
-    api = Api()
+    autoload = sys.argv[1] if len(sys.argv) > 1 and Path(sys.argv[1]).is_file() else None
+    api = Api(autoload_path=autoload)
     window = webview.create_window(
         WINDOW_TITLE,
         str(WEB_DIR / "index.html"),
