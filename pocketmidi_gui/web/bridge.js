@@ -20,7 +20,11 @@ const bridge = (() => {
   return {
     ready,
     ping: () => call("ping"),
-    // Phase 1+: loadMidi, humanise, reroll, exportMidi, getState
+    getStatus: () => call("get_status"),
+    openMidi: () => call("open_midi"),
+    humanise: (params) => call("humanise", params),
+    reroll: (params) => call("reroll", params),
+    exportMidi: () => call("export_midi"),
   };
 })();
 
