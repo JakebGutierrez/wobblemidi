@@ -53,11 +53,13 @@ def _signed_offset_ms(abs_tick: int, grid_tick: int, tempo_map, ppq: int) -> flo
     return -ticks_to_ms_with_map(abs_tick, grid_tick, tempo_map, ppq)
 
 
-def _collect(gmd_dir: Path):
+def _collect(gmd_dir: Path, train_only: bool = False):
     """Return (tracks, n_rock, files_skipped). Each track = {'hits': [...], 'bpm': float},
-    hits time-ordered dicts: grid_tick, grid_pos, group, offset_ms."""
+    hits time-ordered dicts: grid_tick, grid_pos, group, offset_ms, velocity."""
     info = pd.read_csv(gmd_dir / "info.csv")
     rock = info[info["style"].str.startswith("rock")]
+    if train_only:
+        rock = rock[rock["split"] == "train"]
     tracks: list[dict] = []
     skipped = 0
     for row in rock.itertuples():
@@ -93,6 +95,7 @@ def _collect(gmd_dir: Path):
                     "grid_pos": grid_position_in_bar(gt, ppq),
                     "group": grp,
                     "offset_ms": _signed_offset_ms(abs_tick, gt, tmap, ppq),
+                    "velocity": float(msg.velocity),
                 })
             if len(hits) >= MIN_TRACK_HITS:
                 tracks.append({"hits": hits, "bpm": float(row.bpm)})
@@ -132,12 +135,49 @@ def _phi(r: float) -> float:
     return max(0.0, min(0.99, r / (1.0 - RESIDUAL_SHARE)))
 
 
+def _vel_lag1_by_group(tracks) -> dict[str, tuple[float, int]]:
+    """Velocity lag-1 autocorrelation per instrument group (spec B2 convention).
+
+    Residual = velocity − mean over the hit's own (take, instrument, grid_pos) cell —
+    the SAME de-meaning the profile build (A2) and validation harness use, so the
+    numbers are like-for-like. Same-slot same-instrument hits collapse by mean;
+    sequences run within (take, instrument); pairs pool per instrument.
+    Returns {group: (r, n_pairs)} for groups with >= 100 pooled pairs.
+    """
+    out: dict[str, tuple[float, int]] = {}
+    groups = sorted({h["group"] for t in tracks for h in t["hits"]})
+    for group in groups:
+        xs: list[float] = []
+        ys: list[float] = []
+        for tr in tracks:
+            hits = [h for h in tr["hits"] if h["group"] == group]
+            if len(hits) < 2:
+                continue
+            cell = defaultdict(list)
+            for h in hits:
+                cell[h["grid_pos"]].append(h["velocity"])
+            cmean = {k: float(np.mean(v)) for k, v in cell.items()}
+            by_slot = defaultdict(list)
+            for h in hits:
+                by_slot[h["grid_tick"]].append(h["velocity"] - cmean[h["grid_pos"]])
+            seq = [float(np.mean(by_slot[k])) for k in sorted(by_slot)]
+            xs.extend(seq[:-1])
+            ys.extend(seq[1:])
+        if len(xs) >= 100 and np.std(xs) > 0 and np.std(ys) > 0:
+            out[group] = (float(np.corrcoef(xs, ys)[0, 1]), len(xs))
+    return out
+
+
 @click.command()
 @click.argument("gmd_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-def main(gmd_dir: Path) -> None:
-    tracks, n_rock, skipped = _collect(gmd_dir)
+@click.option("--train-only", is_flag=True,
+              help="Restrict to GMD split=='train' takes (keeps the constant clean of "
+                   "the validation harness's held-out test takes).")
+def main(gmd_dir: Path, train_only: bool) -> None:
+    tracks, n_rock, skipped = _collect(gmd_dir, train_only=train_only)
     total_hits = sum(len(t["hits"]) for t in tracks)
-    click.echo(f"Rock files: {n_rock}  (skipped non-4/4/unreadable: {skipped})")
+    split_note = " [train split only]" if train_only else ""
+    click.echo(f"Rock files: {n_rock}{split_note}  (skipped non-4/4/unreadable: {skipped})")
     click.echo(f"Usable tracks: {len(tracks)}   total hits: {total_hits}")
 
     r, npairs = _lag1_r(tracks, delean=True, collapse=True)
@@ -159,6 +199,18 @@ def main(gmd_dir: Path) -> None:
         if sub:
             rr, npp = _lag1_r(sub, delean=True, collapse=True)
             click.echo(f"  {label:12s}: r={rr:+.3f}  phi={_phi(rr):.3f}  ({len(sub)} tracks, {npp} pairs)")
+
+    # -- velocity (spec B2: kick-only VelDrift; phi_vel = r/(1-beta)) --------------------
+    click.echo("")
+    click.echo("Velocity lag-1 by instrument (de-meaned per (take, instrument, position)):")
+    vel = _vel_lag1_by_group(tracks)
+    for group, (r_g, n_g) in sorted(vel.items()):
+        click.echo(f"  {group:14s}: r={r_g:+.3f}  phi_vel={_phi(r_g):.3f}  [{n_g} pairs]")
+    if "kick" in vel:
+        r_kick = vel["kick"][0]
+        click.echo("")
+        click.echo(f"==> recommended PHI_VEL (kick-only drift) = r_kick/(1-beta) = {_phi(r_kick):.3f}")
+        click.echo("    (snare/hat/ride are ~white — i.i.d. sampling stays correct for them)")
 
 
 if __name__ == "__main__":
