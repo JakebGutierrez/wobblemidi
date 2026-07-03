@@ -1,18 +1,34 @@
 import sys
 from pathlib import Path
 
+import numpy as np
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "scripts"))
-from build_profiles import MIN_SAMPLES, _build_pairs_with_clip, _build_profiles, _clip_hits
+from build_profiles import (
+    MIN_SAMPLES,
+    SHRINKAGE_K,
+    _build_pairs_with_clip,
+    _build_profiles,
+    _clip_hits,
+    build_profile_output,
+    residualise_velocities,
+)
+
+
+def _hits(n, offset_fn=lambda i: float(i % 20 - 10), vel_delta=0.0):
+    """Hits with precomputed vel_delta (the A2 residual) as _build_pairs expects."""
+    return [{"offset_ms": offset_fn(i), "velocity": 80.0, "vel_delta": vel_delta}
+            for i in range(n)]
 
 
 # ── unit tests for _build_pairs_with_clip ────────────────────────────────────
 
 def test_outlier_offsets_absent_from_pairs():
     """Extreme offset_ms values are not present in the returned pairs."""
-    normal = [{"offset_ms": float(i % 20 - 10), "velocity": 80.0} for i in range(98)]
+    normal = _hits(98)
     outliers = [
-        {"offset_ms": -9999.0, "velocity": 10.0},
-        {"offset_ms":  9999.0, "velocity": 10.0},
+        {"offset_ms": -9999.0, "velocity": 10.0, "vel_delta": -70.0},
+        {"offset_ms":  9999.0, "velocity": 10.0, "vel_delta": -70.0},
     ]
     pairs = _build_pairs_with_clip(normal + outliers)
     assert pairs is not None
@@ -25,46 +41,45 @@ def test_returns_none_when_clip_drops_below_min_samples():
     """Returns None rather than writing an under-supported bucket."""
     # MIN_SAMPLES - 2 normal hits plus 2 extreme outliers: after clipping,
     # only MIN_SAMPLES - 2 remain, which is below the threshold.
-    hits = [{"offset_ms": 0.0, "velocity": 80.0} for _ in range(MIN_SAMPLES - 2)]
+    hits = _hits(MIN_SAMPLES - 2, offset_fn=lambda i: 0.0)
     hits += [
-        {"offset_ms": -9999.0, "velocity": 80.0},
-        {"offset_ms":  9999.0, "velocity": 80.0},
+        {"offset_ms": -9999.0, "velocity": 80.0, "vel_delta": 0.0},
+        {"offset_ms":  9999.0, "velocity": 80.0, "vel_delta": 0.0},
     ]
     assert _build_pairs_with_clip(hits) is None
 
 
 def test_vel_delta_from_retained_set():
-    """vel_delta is computed from the retained set only.
+    """vel_delta pairs come from the retained set only.
 
-    All normal hits have velocity=80; after clipping the outlier hits
-    (velocity=10) are gone, so every vel_delta must be exactly 0.
-    If clipping were skipped the outlier pairs (delta = 10-80 = -70)
-    would appear and the assertion would fail.
+    All normal hits have vel_delta=0; the outlier hits carry vel_delta=-70 and
+    extreme offsets. After clipping they are gone, so every pair's vel_delta
+    must be exactly 0. If clipping were skipped the -70 deltas would appear.
     """
-    normal = [{"offset_ms": float(i % 20 - 10), "velocity": 80.0} for i in range(98)]
+    normal = _hits(98)
     outliers = [
-        {"offset_ms": -9999.0, "velocity": 10.0},
-        {"offset_ms":  9999.0, "velocity": 10.0},
+        {"offset_ms": -9999.0, "velocity": 10.0, "vel_delta": -70.0},
+        {"offset_ms":  9999.0, "velocity": 10.0, "vel_delta": -70.0},
     ]
     pairs = _build_pairs_with_clip(normal + outliers)
     assert pairs is not None
-    assert all(d == 0.0 for p in pairs for d in [p[1]])
+    assert all(p[1] == 0.0 for p in pairs)
 
 
 # ── integration test for _build_profiles ─────────────────────────────────────
 
 def test_all_bucket_families_clip_outliers():
-    """Every bucket family routes through _build_pairs_with_clip.
+    """Every bucket family routes through the clip step.
 
     If any loop called _build_pairs(hits) directly the extreme offset_ms
     values (-9999, 9999) would appear in the returned profile, failing the
     per-key assertion below.
     """
     n = MIN_SAMPLES + 5
-    normal = [{"offset_ms": float(i % 10), "velocity": 80.0} for i in range(n)]
+    normal = _hits(n, offset_fn=lambda i: float(i % 10))
     extreme = [
-        {"offset_ms": -9999.0, "velocity": 80.0},
-        {"offset_ms":  9999.0, "velocity": 80.0},
+        {"offset_ms": -9999.0, "velocity": 80.0, "vel_delta": 0.0},
+        {"offset_ms":  9999.0, "velocity": 80.0, "vel_delta": 0.0},
     ]
     hits = normal + extreme
 
@@ -83,12 +98,13 @@ def test_all_bucket_families_clip_outliers():
         assert  9999.0 not in offsets, f"extreme offset survived in {key}"
 
 
-# ── unit tests for _clip_hits and bucket_offset_means ────────────────────────
+# ── unit tests for _clip_hits and per-bucket _meta stats ─────────────────────
 
 def test_clip_hits_returns_retained_set():
     """_clip_hits removes outliers and returns the retained hit list."""
-    normal = [{"offset_ms": float(i % 20 - 10), "velocity": 80.0} for i in range(98)]
-    outliers = [{"offset_ms": -9999.0, "velocity": 10.0}, {"offset_ms": 9999.0, "velocity": 10.0}]
+    normal = _hits(98)
+    outliers = [{"offset_ms": -9999.0, "velocity": 10.0, "vel_delta": 0.0},
+                {"offset_ms": 9999.0, "velocity": 10.0, "vel_delta": 0.0}]
     retained = _clip_hits(normal + outliers)
     assert retained is not None
     assert all(h["offset_ms"] != -9999.0 for h in retained)
@@ -97,16 +113,17 @@ def test_clip_hits_returns_retained_set():
 
 def test_clip_hits_returns_none_below_min_samples():
     """_clip_hits returns None when retained set falls below MIN_SAMPLES."""
-    hits = [{"offset_ms": 0.0, "velocity": 80.0} for _ in range(MIN_SAMPLES - 2)]
-    hits += [{"offset_ms": -9999.0, "velocity": 80.0}, {"offset_ms": 9999.0, "velocity": 80.0}]
+    hits = _hits(MIN_SAMPLES - 2, offset_fn=lambda i: 0.0)
+    hits += [{"offset_ms": -9999.0, "velocity": 80.0, "vel_delta": 0.0},
+             {"offset_ms": 9999.0, "velocity": 80.0, "vel_delta": 0.0}]
     assert _clip_hits(hits) is None
 
 
 def test_bucket_offset_means_written():
     """_build_profiles writes bucket_offset_means for all five bucket families."""
     n = MIN_SAMPLES + 5
-    hits = [{"offset_ms": 10.0, "velocity": 80.0} for _ in range(n)]
-    _, means, written, _ = _build_profiles(
+    hits = _hits(n, offset_fn=lambda i: 10.0)
+    _, stats, written, _ = _build_profiles(
         grid_tier_buckets  = {("beat", "kick", "hard", 0): hits},
         grid_style_buckets = {("beat", "kick", 0): hits},
         tier_buckets       = {("beat", "kick", "hard"): hits},
@@ -114,6 +131,106 @@ def test_bucket_offset_means_written():
         global_buckets     = {"kick": hits},
     )
     assert written == 5
+    means = stats["bucket_offset_means"]
     assert len(means) == 5
     for mean in means.values():
         assert abs(mean - 10.0) < 1e-6
+
+
+# ── A2 guardrail 1: every emitted bucket is de-biased to ~0 mean ─────────────
+
+def test_emitted_buckets_debiased_to_zero_mean():
+    """Buckets whose input residuals carry a bias must come out with mean ~0,
+    and the removed bias must be recorded in stats (the _meta diagnostic)."""
+    n = MIN_SAMPLES + 10
+    # residuals alternating around +5 — a biased bucket, as a soft/hard tier
+    # bucket would be after (take, pos, instrument) residualisation
+    hits = [{"offset_ms": float(i % 7 - 3), "velocity": 80.0,
+             "vel_delta": 5.0 + (1.0 if i % 2 else -1.0)} for i in range(n)]
+    profiles, stats, written, _ = _build_profiles(
+        grid_tier_buckets={}, grid_style_buckets={},
+        tier_buckets={("beat", "snare", "soft"): hits},
+        style_buckets={}, global_buckets={},
+    )
+    assert written == 1
+    key = "rock|beat|snare|soft"
+    deltas = np.array([p[1] for p in profiles[key]])
+    assert abs(deltas.mean()) < 1e-9
+    np.testing.assert_allclose(stats["bucket_vel_delta_means"][key], 5.0, atol=0.2)
+    assert stats["vel_sigma_within"][key] > 0
+
+
+# ── A2 residualisation + guardrail 2 shrinkage ───────────────────────────────
+
+def _raw_hit(take, pos, instr, vel):
+    return {"take": take, "grid_pos": pos, "instrument_group": instr,
+            "beat_type": "beat", "offset_ms": 0.0, "velocity": float(vel)}
+
+
+def test_residual_is_deviation_from_cell_mean():
+    """Dense cells: vel_delta ≈ velocity − (take, pos, instrument) cell mean."""
+    # one cell with many hits alternating 70/90 (mean 80); take-level mean also 80,
+    # so shrinkage is a no-op and residuals must be exactly ±10
+    hits = [_raw_hit("t1", 0, "snare", 70 if i % 2 else 90) for i in range(200)]
+    residualise_velocities(hits)
+    deltas = {h["vel_delta"] for h in hits}
+    assert deltas == {10.0, -10.0}
+
+
+def test_sparse_cell_residual_not_fake_zero():
+    """Guardrail 2: an n=1 cell (lone crash) must NOT produce a zero residual —
+    its cell mean is shrunk toward the (take, instrument) mean."""
+    hits = [_raw_hit("t1", p, "crash", 60) for p in range(1, 9) for _ in range(3)]
+    hits.append(_raw_hit("t1", 0, "crash", 110))   # lone loud crash, its own cell
+    residualise_velocities(hits)
+    lone = hits[-1]
+    # unshrunk: residual would be exactly 0. With SHRINKAGE_K pseudo-counts of the
+    # take/instrument mean, most of the 110-vs-60ish deviation must survive.
+    assert lone["vel_delta"] > 30.0
+    # exact shrinkage arithmetic: an n=1 cell keeps K/(1+K) of its deviation
+    expected_frac = SHRINKAGE_K / (1 + SHRINKAGE_K)
+    take_mean = float(np.mean([h["velocity"] for h in hits]))
+    assert abs(lone["vel_delta"] - expected_frac * (110.0 - take_mean)) < 1e-9
+
+
+def test_residuals_do_not_leak_across_takes():
+    """Cell means are per take: identical positions in different takes get their
+    own means (a loud take and a quiet take each centre on themselves)."""
+    loud = [_raw_hit("loud", 0, "kick", v) for v in (100, 110)] * 20
+    quiet = [_raw_hit("quiet", 0, "kick", v) for v in (60, 70)] * 20
+    hits = loud + quiet
+    residualise_velocities(hits)
+    assert abs(np.mean([h["vel_delta"] for h in hits if h["take"] == "loud"])) < 1e-9
+    assert abs(np.mean([h["vel_delta"] for h in hits if h["take"] == "quiet"])) < 1e-9
+    # residual magnitudes reflect within-take variation (±5), not the 40-unit take gap
+    assert all(abs(h["vel_delta"]) < 10 for h in hits)
+
+
+# ── build_profile_output end-to-end: schema v2 _meta contract ────────────────
+
+def test_build_profile_output_schema_v2():
+    rng = np.random.RandomState(0)
+    raw_hits = []
+    for take in ("a", "b", "c"):
+        for pos in range(16):
+            for _ in range(4):
+                raw_hits.append({
+                    "take": take, "beat_type": "beat", "instrument_group": "kick",
+                    "offset_ms": float(rng.normal(0, 10)),
+                    "velocity": float(rng.randint(60, 100)), "grid_pos": pos,
+                })
+    output, written, _ = build_profile_output(raw_hits)
+
+    meta = output["_meta"]
+    assert meta["schema_version"] == 2
+    assert "kick" in meta["velocity_thresholds"]
+    assert set(meta["bucket_vel_delta_means"]) == set(meta["vel_sigma_within"])
+    assert written > 0
+    # A4: bucket values are still [[offset_ms, vel_delta], ...] pairs,
+    # and every emitted bucket's vel_delta mean is ~0 (guardrail 1)
+    for key, pairs in output.items():
+        if key == "_meta":
+            continue
+        arr = np.array(pairs)
+        assert arr.ndim == 2 and arr.shape[1] == 2
+        assert abs(arr[:, 1].mean()) < 1e-9, f"bucket {key} not de-biased"

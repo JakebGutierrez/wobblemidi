@@ -49,11 +49,54 @@ def _velocity_tier(velocity: float, thresholds: tuple[float, float]) -> str:
         return "hard"
 
 
+# --- A2: velocity residualisation ------------------------------------------------
+# vel_delta = velocity − mean velocity of the hit's own (take, grid_position,
+# instrument) cell. Accent structure lives in the contour the USER programs; the old
+# definition (delta vs bucket median) sampled that structure as noise. The residual
+# keeps only within-performance imperfection (velocity sigma roughly halves).
+#
+# Guardrail 2 — sparse-cell shrinkage: an n=1 cell's mean equals the hit itself,
+# making its residual exactly 0 (fake zero-noise crashes/fills). Every cell mean is
+# shrunk toward the broader (take, instrument) mean with a pseudo-count:
+#     shrunk = (n * cell_mean + SHRINKAGE_K * take_instr_mean) / (n + SHRINKAGE_K)
+# SHRINKAGE_K = 5 is the threshold in effect: cells with n ≲ 5 are materially shrunk
+# (an n=1 cell keeps 5/6 of its deviation from the take/instrument level as its
+# residual); cells with n ≫ 5 are essentially untouched.
+SHRINKAGE_K = 5
+
+
+def residualise_velocities(raw_hits: list[dict]) -> None:
+    """Annotate every hit with its vel_delta (in place) per the A2 definition above.
+
+    Requires each hit to carry "take", "grid_pos", "instrument_group", "velocity".
+    """
+    cell_vels: dict[tuple, list[float]] = defaultdict(list)
+    take_instr_vels: dict[tuple, list[float]] = defaultdict(list)
+    for h in raw_hits:
+        cell_vels[(h["take"], h["grid_pos"], h["instrument_group"])].append(h["velocity"])
+        take_instr_vels[(h["take"], h["instrument_group"])].append(h["velocity"])
+
+    shrunk_mean: dict[tuple, float] = {}
+    for (take, pos, instr), vels in cell_vels.items():
+        broad = float(np.mean(take_instr_vels[(take, instr)]))
+        n = len(vels)
+        shrunk_mean[(take, pos, instr)] = (
+            n * float(np.mean(vels)) + SHRINKAGE_K * broad
+        ) / (n + SHRINKAGE_K)
+
+    for h in raw_hits:
+        h["vel_delta"] = h["velocity"] - shrunk_mean[
+            (h["take"], h["grid_pos"], h["instrument_group"])
+        ]
+
+
 def _build_pairs(hits: list[dict]) -> list[list[float]]:
-    """Convert a list of raw hit dicts to [[offset_ms, vel_delta], ...] pairs."""
-    velocities = [h["velocity"] for h in hits]
-    median_vel = float(np.median(velocities))
-    return [[h["offset_ms"], h["velocity"] - median_vel] for h in hits]
+    """Convert raw hit dicts to [[offset_ms, vel_delta], ...] pairs (A4 storage contract).
+
+    vel_delta is the hit's velocity residual against its own shrunk
+    (take, grid_position, instrument) mean, precomputed by residualise_velocities().
+    """
+    return [[h["offset_ms"], h["vel_delta"]] for h in hits]
 
 
 def _clip_hits(hits: list[dict]) -> list[dict] | None:
@@ -90,15 +133,21 @@ def _build_profiles(
     tier_buckets: dict,
     style_buckets: dict,
     global_buckets: dict,
-) -> tuple[dict[str, list[list[float]]], dict[str, float], int, int]:
+) -> tuple[dict[str, list[list[float]]], dict[str, dict[str, float]], int, int]:
     """Build the profiles dict from pre-grouped bucket dicts.
 
-    Returns (profiles, bucket_offset_means, written_count, skipped_count).
-    Every bucket family uses _clip_hits so the mean is computed from the same
+    Returns (profiles, stats, written_count, skipped_count) where stats holds the
+    per-bucket _meta maps: "bucket_offset_means", "bucket_vel_delta_means" (the bias
+    removed by the guardrail-1 de-bias), and "vel_sigma_within".
+    Every bucket family uses _clip_hits so all stats are computed from the same
     retained set used for KDE fitting.
     """
     profiles: dict[str, list[list[float]]] = {}
-    bucket_offset_means: dict[str, float] = {}
+    stats: dict[str, dict[str, float]] = {
+        "bucket_offset_means": {},
+        "bucket_vel_delta_means": {},
+        "vel_sigma_within": {},
+    }
     written = 0
     skipped = 0
 
@@ -108,8 +157,21 @@ def _build_profiles(
         if retained is None:
             skipped += 1
             return
-        profiles[key] = _build_pairs(retained)
-        bucket_offset_means[key] = float(np.mean([h["offset_ms"] for h in retained]))
+        pairs = _build_pairs(retained)
+        # Guardrail 1 (A2): residualising per (take, pos, instrument) does NOT give a
+        # zero mean at the emitted-bucket level (tier buckets systematically collect
+        # the low/high residuals of their cells, re-introducing accent bias). De-bias
+        # every emitted bucket to ~0 and keep the removed mean in _meta for diagnostics.
+        vd_mean = float(np.mean([p[1] for p in pairs]))
+        pairs = [[off, vd - vd_mean] for off, vd in pairs]
+        debiased = np.array([p[1] for p in pairs])
+        assert abs(float(debiased.mean())) < 1e-9, (
+            f"bucket {key}: vel_delta mean {float(debiased.mean()):.3e} not ~0 after de-bias"
+        )
+        profiles[key] = pairs
+        stats["bucket_offset_means"][key] = float(np.mean([h["offset_ms"] for h in retained]))
+        stats["bucket_vel_delta_means"][key] = vd_mean
+        stats["vel_sigma_within"][key] = float(debiased.std())
         written += 1
 
     for (beat_type, instrument_group, tier, gp), hits in grid_tier_buckets.items():
@@ -127,7 +189,7 @@ def _build_profiles(
     for instrument_group, hits in global_buckets.items():
         _write(f"global|{instrument_group}", hits)
 
-    return profiles, bucket_offset_means, written, skipped
+    return profiles, stats, written, skipped
 
 
 def collect_hits(gmd_dir: Path, files: pd.DataFrame) -> tuple[list[dict], int]:
@@ -187,6 +249,7 @@ def collect_hits(gmd_dir: Path, files: pd.DataFrame) -> tuple[list[dict], int]:
 
                 raw_hits.append(
                     {
+                        "take": row.id,   # A1: source-take tag (unlocks A2 + split builds)
                         "beat_type": row.beat_type,
                         "instrument_group": instrument_group,
                         "offset_ms": offset_ms,
@@ -204,6 +267,9 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
     Returns (output, written, skipped_buckets) where *output* is the JSON-ready
     profile dict including the ``_meta`` block.
     """
+    # A2: annotate every hit with its velocity residual before any bucketing.
+    residualise_velocities(raw_hits)
+
     # ------------------------------------------------------------------
     # Compute velocity tertile thresholds for kick and snare
     # (from post-filter raw_hits so boundaries match the retained data)
@@ -258,21 +324,29 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
     # ------------------------------------------------------------------
     # Build profiles, clipping offset outliers and enforcing MIN_SAMPLES
     # ------------------------------------------------------------------
-    profiles, bucket_offset_means, written, skipped_buckets = _build_profiles(
+    profiles, stats, written, skipped_buckets = _build_profiles(
         grid_tier_buckets, grid_style_buckets, tier_buckets, style_buckets, global_buckets
     )
 
     # ------------------------------------------------------------------
     # Assemble JSON-ready dict (bucket data + _meta)
+    # A4: bucket values stay [[offset_ms, vel_delta], ...]; only _meta grows.
     # ------------------------------------------------------------------
     output: dict = {
         "_meta": {
+            "schema_version": 2,
+            "vel_delta_definition": (
+                "velocity residual vs shrunk (take, grid_position, instrument) mean; "
+                "each emitted bucket de-biased to mean 0"
+            ),
             "velocity_thresholds": {
                 instr: list(thresholds)
                 for instr, thresholds in velocity_thresholds.items()
             },
             "kde_bw_method": KDE_BW_METHOD,
-            "bucket_offset_means": bucket_offset_means,
+            "bucket_offset_means": stats["bucket_offset_means"],
+            "bucket_vel_delta_means": stats["bucket_vel_delta_means"],
+            "vel_sigma_within": stats["vel_sigma_within"],
         }
     }
     output.update(profiles)
@@ -282,25 +356,32 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
 
 @click.command()
 @click.argument("gmd_dir", type=click.Path(exists=True, file_okay=False, path_type=Path))
-def main(gmd_dir: Path) -> None:
+@click.option("--split", type=click.Choice(["all", "train"]), default="all", show_default=True,
+              help="Restrict source takes to a GMD split (train = the validation "
+                   "harness's gate split).")
+@click.option("--output", "output_path", type=click.Path(dir_okay=False, path_type=Path),
+              default=OUTPUT_FILE, show_default=True, help="Where to write the profile JSON.")
+def main(gmd_dir: Path, split: str, output_path: Path) -> None:
     """Ingest GMD rock files and write timing/velocity profiles to pocketmidi/profiles/rock.json."""
     info = pd.read_csv(gmd_dir / "info.csv")
     rock = info[info["style"].str.startswith("rock")]
-    click.echo(f"Rock files: {len(rock)}")
+    if split == "train":
+        rock = rock[rock["split"] == "train"]
+    click.echo(f"Rock files: {len(rock)}" + (" [train split only]" if split == "train" else ""))
 
     raw_hits, skipped_files = collect_hits(gmd_dir, rock)
     click.echo(f"Total raw hits collected: {len(raw_hits)}  (files skipped: {skipped_files})")
 
     output, written, skipped_buckets = build_profile_output(raw_hits)
 
-    OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with OUTPUT_FILE.open("w") as f:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w") as f:
         json.dump(output, f)
 
     click.echo(
         f"Buckets written: {written}  skipped (< {MIN_SAMPLES} samples): {skipped_buckets}"
     )
-    click.echo(f"Profile written to: {OUTPUT_FILE}")
+    click.echo(f"Profile written to: {output_path}")
 
 
 if __name__ == "__main__":
