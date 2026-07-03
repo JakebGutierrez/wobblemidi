@@ -10,9 +10,10 @@ from pocketmidi.humanise import load_profile, humanise
 @click.argument("output_path", type=click.Path(dir_okay=False))
 @click.option("--genre",     default="rock",  show_default=True,
               help="Genre profile to use.")
-@click.option("--intensity", default=1.0,     show_default=True,
+@click.option("--intensity", default=0.35,    show_default=True,
               type=click.FloatRange(0.0, 1.0),
-              help="Humanisation strength 0.0–1.0.")
+              help="Humanisation strength 0.0–1.0. 0.2–0.5 is the useful range; "
+                   "higher values reproduce raw drummer spread and will sound loose.")
 @click.option("--section",   default="beat",  show_default=True,
               type=click.Choice(["beat", "fill"]),
               help="Beat section type.")

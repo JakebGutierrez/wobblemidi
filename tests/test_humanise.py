@@ -894,14 +894,15 @@ class TestDrumChannelFilter:
         return result
 
     def test_non_drum_channel_note_untouched_by_default(self, tmp_path):
-        out = _run_humanise(self._two_channel_midi(), self._PROFILE, tmp_path, seed=0)
+        out = _run_humanise(self._two_channel_midi(), self._PROFILE, tmp_path,
+                            intensity=1.0, seed=0)
         ons = self._note_ons_by_channel(out)
         assert ons[0] == (0, 64), "channel-0 drum-range note must pass through untouched"
         assert ons[9] == (960 + self._SHIFT_TICKS, 74), "channel-9 kick must be humanised"
 
     def test_all_channels_reenables_other_channels(self, tmp_path):
         out = _run_humanise(self._two_channel_midi(), self._PROFILE, tmp_path,
-                            seed=0, all_channels=True)
+                            intensity=1.0, seed=0, all_channels=True)
         ons = self._note_ons_by_channel(out)
         assert ons[0] == (0 + self._SHIFT_TICKS, 74), "channel-0 note must shift with all_channels"
         assert ons[9] == (960 + self._SHIFT_TICKS, 74)
@@ -911,6 +912,7 @@ class TestDrumChannelFilter:
         params = inspect.signature(humanise).parameters
         assert params["all_channels"].default is False
         assert params["phi"].default == 0.4  # roadmap: phi default 0.5 → 0.4
+        assert params["intensity"].default == 0.35  # ear-tested; 1.0 = raw GMD spread
 
 
 # ---------------------------------------------------------------------------
@@ -1186,7 +1188,7 @@ class TestHumaniseMeterHandling:
             },
             velocity_thresholds={},
         )
-        humanise(inp, out, profile, seed=0)  # must not raise
+        humanise(inp, out, profile, intensity=1.0, seed=0)  # must not raise
         result = mido.MidiFile(str(out))
         for track in result.tracks:
             for msg in track:
@@ -1421,7 +1423,7 @@ class TestPushFlag:
         out = tmp_path / "out_push.mid"
         profile = self._profile_with_known_mean()
 
-        humanise(inp, out, profile, seed=0, push=True)
+        humanise(inp, out, profile, intensity=1.0, seed=0, push=True)
 
         grid_tick = 4 * self.PPQ
         result_tick = self._kick_abs_tick(out)
@@ -1573,7 +1575,7 @@ class TestCoupling:
     def test_phi0_leaves_chord_members_independent(self, tmp_path):
         # Coupling OFF at phi=0: each lands at its OWN offset → clearly separated (~30 ms).
         inp = self._chord_midi(tmp_path); out = tmp_path / "o.mid"
-        humanise(inp, out, self._profile_meanless(), seed=0, phi=0.0)
+        humanise(inp, out, self._profile_meanless(), intensity=1.0, seed=0, phi=0.0)
         assert self._gap_ms(out) == pytest.approx(30.0, abs=3.0)
 
     def test_coupled_hits_tight_phi_gt_0(self, tmp_path):
@@ -1729,7 +1731,7 @@ class TestGrooveDriftInteractions:
         )
         inp, _ = self._kick_line(tmp_path, n=48, step_ticks=self.PPQ)
         out = tmp_path / "o.mid"
-        humanise(inp, out, prof, seed=0, phi=0.5)
+        humanise(inp, out, prof, intensity=1.0, seed=0, phi=0.5)
         mid = mido.MidiFile(str(out)); tmap = build_tempo_map(mid)
         offs = []; t = 0
         for msg in mid.tracks[0]:
@@ -1927,7 +1929,8 @@ class TestVelDrift:
         # The drift split redistributes velocity variance; it must not change the spread.
         out = tmp_path / "o.mid"
         humanise(self._line(tmp_path, 36, 4000), out,
-                 self._spready_profile("rock|beat|kick"), seed=1, velocity_only=True)
+                 self._spready_profile("rock|beat|kick"),
+                 intensity=1.0, seed=1, velocity_only=True)
         kv = self._out_vels(out, 36) - 90.0
         raw_sd = float(np.array([-12.0, -6.0, 0.0, 6.0, 12.0]).std())
         assert float(kv.std()) == pytest.approx(raw_sd, rel=0.15)
@@ -1942,7 +1945,8 @@ class TestVelDrift:
             velocity_thresholds={},
         )
         out = tmp_path / "o.mid"
-        humanise(self._line(tmp_path, 36, 2000), out, prof, seed=2, velocity_only=True)
+        humanise(self._line(tmp_path, 36, 2000), out, prof,
+                 intensity=1.0, seed=2, velocity_only=True)
         assert float(self._out_vels(out, 36).mean()) == pytest.approx(100.0, abs=1.0)
 
     def test_timing_identical_across_velocity_processing(self, tmp_path):
@@ -2101,7 +2105,7 @@ class TestRelativeTieringIntegration:
             velocity_thresholds={"snare": (110.0, 120.0)},
         )
         out = tmp_path / "o.mid"
-        humanise(inp, out, prof, seed=0, velocity_only=True)
+        humanise(inp, out, prof, intensity=1.0, seed=0, velocity_only=True)
 
         got = [m.velocity for m in mido.MidiFile(str(out)).tracks[0]
                if m.type == "note_on" and m.velocity > 0]
@@ -2130,7 +2134,7 @@ class TestRelativeTieringIntegration:
             velocity_thresholds={"snare": (110.0, 120.0)},
         )
         out = tmp_path / "o.mid"
-        humanise(inp, out, prof, seed=0, velocity_only=True)
+        humanise(inp, out, prof, intensity=1.0, seed=0, velocity_only=True)
         got = [m.velocity for m in mido.MidiFile(str(out)).tracks[0]
                if m.type == "note_on" and m.velocity > 0]
         assert got == [80] * 16   # all soft: 100 - 20

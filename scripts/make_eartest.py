@@ -132,11 +132,11 @@ def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path,
                  genre="rock", beat_type="beat", seed=seed, **kwargs)
         click.echo(f"{label.replace('_', ' '):<15}: {out_path}")
 
-    # Timing-only intensity sweep: same seed → identical offset draws, scaled
-    # linearly toward the grid. Isolates "too much timing spread at the default"
-    # from "spread feels random regardless of amount" (which would point at the
-    # correlation structure, not the amount). The plain timingonly file above is
-    # the intensity-1.0 reference.
+    # Timing-only intensity sweep at EXPLICIT intensities: same seed → identical
+    # offset draws, scaled linearly toward the grid. Isolates "too much timing
+    # spread" from "spread feels random regardless of amount" (which would point
+    # at the correlation structure, not the amount). The un-suffixed legs above
+    # render at the humanise() default intensity.
     for i in timing_sweep:
         out_path = out_dir / f"rock_ghosts_new_timingonly_i{int(round(i * 100)):02d}.mid"
         humanise(input_path, out_path, cand_prof,
@@ -144,7 +144,9 @@ def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path,
                  timing_only=True, intensity=i)
         click.echo(f"timing i={i:.1f}  : {out_path}")
 
-    click.echo("\nSame seed, default settings (intensity 1.0, phi 0.4, no push).")
+    import inspect
+    default_intensity = inspect.signature(humanise).parameters["intensity"].default
+    click.echo(f"\nSame seed, default settings (intensity {default_intensity}, phi 0.4, no push).")
     click.echo("Listen for: ghost/backbeat roles surviving on the snare, and the")
     click.echo("hi-hat accent contour staying intact instead of machine-gunning.")
 

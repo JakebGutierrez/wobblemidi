@@ -380,7 +380,10 @@ def humanise(
     profiles: LoadedProfile,
     genre: str = "rock",
     beat_type: str = "beat",
-    intensity: float = 1.0,
+    # Default 0.35: ear-tested sweet spot. 1.0 reproduces GMD's raw within-take spread
+    # (~27 ms timing sigma) — real, but reads as sloppy in produced music. The scale
+    # stays linear and un-capped; 1.0 remains fully available.
+    intensity: float = 0.35,
     seed: int | None = None,
     verbose: bool = False,
     timing_only: bool = False,

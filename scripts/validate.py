@@ -530,6 +530,10 @@ def evaluate_level(
                 humanise(
                     prog_paths[tk.take_id], out_path, prof,
                     genre="rock", beat_type=tk.beat_type,
+                    # Measure at FULL scale regardless of the product's default
+                    # intensity: gating compares the engine's reproduction of the
+                    # human distributions, and all recorded baselines are at 1.0.
+                    intensity=1.0,
                     seed=seed * 1000 + tj,          # distinct RNG stream per take
                 )
                 o_abs, o_vel = read_output_hits(out_path, tk)

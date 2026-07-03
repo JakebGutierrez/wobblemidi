@@ -24,17 +24,18 @@ pip install -e ".[dev]"
 pocketmidi drums.mid drums_humanised.mid
 ```
 
-By default this applies full humanisation (`--intensity 1.0`) using the rock profile. Start lower:
+By default this applies humanisation at `--intensity 0.35` using the rock profile. Turn it up
+for a looser feel:
 
 ```bash
-pocketmidi drums.mid drums_humanised.mid --intensity 0.3
+pocketmidi drums.mid drums_humanised.mid --intensity 0.5
 ```
 
 ## Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--intensity` | `1.0` | Humanisation strength, 0.0–1.0. 0.3–0.5 is a good starting point. |
+| `--intensity` | `0.35` | Humanisation strength, 0.0–1.0. 0.2–0.5 is the useful range; higher values reproduce the raw drummer spread from the source recordings and will sound loose. |
 | `--section` | `beat` | Pass `fill` for fill passages — uses a separate timing distribution. |
 | `--genre` | `rock` | Profile to use. Only `rock` is included in v1. |
 | `--seed` | none | Integer seed for reproducible output. |
