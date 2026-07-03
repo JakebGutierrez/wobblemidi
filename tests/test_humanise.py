@@ -2017,6 +2017,41 @@ class TestRelativeTierThresholds:
         low, high = _file_tier_thresholds(v, self.ABSOLUTE)
         assert low == high == pytest.approx(80.0)
 
+    def test_imbalanced_two_value_ghosts_go_soft(self):
+        # Codex review fix: [35]*14 + [110]*2 failed the 15% fraction gate, fell
+        # through to tertiles that collapsed to (35, 35), and routed the GHOSTS to
+        # hard. Two distinct values with a real spread must split soft/hard.
+        v = [35] * 14 + [110] * 2
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert _velocity_tier(35, (low, high)) == "soft"
+        assert _velocity_tier(110, (low, high)) == "hard"
+
+    def test_imbalanced_two_value_accent_majority(self):
+        # mirror image: 2 ghosts against 14 accents
+        v = [35] * 2 + [110] * 14
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert _velocity_tier(35, (low, high)) == "soft"
+        assert _velocity_tier(110, (low, high)) == "hard"
+
+    def test_collapsed_tertiles_dominant_middle_stays_medium(self):
+        # three levels with a dominant middle: both tertiles collapse onto 75;
+        # tie-aware re-anchoring must keep soft/medium/hard intact
+        v = [30] * 2 + [75] * 12 + [110] * 2
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert _velocity_tier(30, (low, high)) == "soft"
+        assert _velocity_tier(75, (low, high)) == "medium"
+        assert _velocity_tier(110, (low, high)) == "hard"
+
+    def test_collapsed_tertiles_dominant_bottom_goes_soft(self):
+        # dominant duplicated value at the BOTTOM of a 3-level part, minority too
+        # small for the two-cluster gap path (0.111 < 0.15) AND close neighbour so
+        # the gap check fails: tertiles collapse onto 35 → it must stay soft
+        v = [35] * 14 + [50] * 2 + [110] * 2
+        low, high = _file_tier_thresholds(v, self.ABSOLUTE)
+        assert _velocity_tier(35, (low, high)) == "soft"
+        assert _velocity_tier(50, (low, high)) == "hard"
+        assert _velocity_tier(110, (low, high)) == "hard"
+
     def test_tiny_minority_cluster_not_two_cluster(self):
         # one stray accent in 40 hits (<15%) must not force a two-cluster split
         v = [70 + (i % 5) * 4 for i in range(39)] + [120]

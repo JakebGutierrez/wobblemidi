@@ -125,12 +125,19 @@ def _file_tier_thresholds(
 
     - Insufficient evidence (few hits / narrow spread) → the profile's GMD-absolute
       thresholds, unchanged behaviour.
+    - Exactly two distinct velocity values (a 2-level palette or a ghost/backbeat
+      part) → soft/hard at their midpoint regardless of balance: the spread gate
+      above already established a real gap, and an imbalanced duplicate part
+      (e.g. 14 ghosts + 2 accents) must not fall through to tertiles that
+      collapse onto the dominant value and route the ghosts to hard.
     - Two-cluster (ghost/accent) parts → both thresholds at the midpoint of the
       dominant velocity gap, so hits map to soft/hard only — no bogus medium.
       A gap qualifies when it is at least as wide as the spread of either side it
       separates and both sides hold a real share of the hits.
     - Otherwise → relative tertiles (33rd/66th percentile of the file's own
-      velocities for that instrument).
+      velocities for that instrument), tie-aware: a dominant duplicated value can
+      collapse both tertiles onto itself, so collapsed thresholds are re-anchored
+      to midpoints BETWEEN distinct values, never on one.
     Thresholds compare values, so equal velocities always share a tier (ties preserved).
     """
     v = np.asarray(velocities, dtype=float)
@@ -140,21 +147,40 @@ def _file_tier_thresholds(
     if p90 - p10 < RELATIVE_TIER_MIN_SPREAD:
         return absolute
     vals = np.unique(v)
-    if len(vals) >= 2:
-        gaps = np.diff(vals)
-        gi = int(np.argmax(gaps))
-        gap = float(gaps[gi])
-        frac_lo = float((v <= vals[gi]).mean())
-        spread_lo = float(vals[gi] - vals[0])
-        spread_hi = float(vals[-1] - vals[gi + 1])
-        if (
-            gap >= RELATIVE_TIER_MIN_SPREAD
-            and gap >= TWO_CLUSTER_DOMINANCE * max(spread_lo, spread_hi)
-            and min(frac_lo, 1.0 - frac_lo) >= TWO_CLUSTER_MIN_FRAC
-        ):
-            boundary = float(vals[gi]) + gap / 2.0
-            return (boundary, boundary)
+    if len(vals) == 2:
+        boundary = float(vals.mean())
+        return (boundary, boundary)
+    gaps = np.diff(vals)
+    gi = int(np.argmax(gaps))
+    gap = float(gaps[gi])
+    frac_lo = float((v <= vals[gi]).mean())
+    spread_lo = float(vals[gi] - vals[0])
+    spread_hi = float(vals[-1] - vals[gi + 1])
+    if (
+        gap >= RELATIVE_TIER_MIN_SPREAD
+        and gap >= TWO_CLUSTER_DOMINANCE * max(spread_lo, spread_hi)
+        and min(frac_lo, 1.0 - frac_lo) >= TWO_CLUSTER_MIN_FRAC
+    ):
+        boundary = float(vals[gi]) + gap / 2.0
+        return (boundary, boundary)
     low, high = np.percentile(v, [33, 66])
+    if low == high:
+        # Tie-aware re-anchor: both tertiles collapsed onto one dominant value t*
+        # (>= a third of the mass on each side of it is t* itself). Boundaries on a
+        # data value misroute it — v < low means t* and everything below it would go
+        # NOT-soft. Place each boundary halfway to the adjacent distinct value; a
+        # missing side (t* is the bottom/top level) collapses soft/hard accordingly.
+        t_star = float(low)
+        below = vals[vals < t_star]
+        above = vals[vals > t_star]
+        lo_bound = float((below[-1] + t_star) / 2.0) if len(below) else None
+        hi_bound = float((t_star + above[0]) / 2.0) if len(above) else None
+        # spread gate guarantees at least one neighbour exists
+        if lo_bound is None:
+            return (hi_bound, hi_bound)   # t* is the bottom level → soft
+        if hi_bound is None:
+            return (lo_bound, lo_bound)   # t* is the top level → hard
+        return (lo_bound, hi_bound)       # t* is the middle level → medium
     return (float(low), float(high))
 
 
