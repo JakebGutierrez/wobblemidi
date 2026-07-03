@@ -114,6 +114,19 @@ def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path) -> None:
                  genre="rock", beat_type="beat", seed=seed)
         click.echo(f"{label}:    {out_path}   (profile: {prof_path})")
 
+    # Diagnostic legs: each humanisation axis in isolation, candidate profile only.
+    # The RNG streams are isolated by design, so with the same seed these decompose
+    # the full render exactly: new_velonly carries new.mid's velocities on the
+    # input's grid timing, and new_timingonly carries new.mid's timing with the
+    # input's programmed velocities.
+    cand_prof = load_profile(candidate)
+    for label, kwargs in (("new_velonly", {"velocity_only": True}),
+                          ("new_timingonly", {"timing_only": True})):
+        out_path = out_dir / f"rock_ghosts_{label}.mid"
+        humanise(input_path, out_path, cand_prof,
+                 genre="rock", beat_type="beat", seed=seed, **kwargs)
+        click.echo(f"{label.replace('_', ' '):<15}: {out_path}")
+
     click.echo("\nSame seed, default settings (intensity 1.0, phi 0.4, no push).")
     click.echo("Listen for: ghost/backbeat roles surviving on the snare, and the")
     click.echo("hi-hat accent contour staying intact instead of machine-gunning.")
