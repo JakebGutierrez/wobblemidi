@@ -36,6 +36,7 @@ All tests must pass before moving to the next module.
 | 10 | Outlier clipping | done |
 | 11 | 6/8 support | done |
 | 12 | Groove drift + coupled hits (`--groove-tightness`) | done |
+| 13 | Velocity rebuild (schema v2: residual vel_delta, kick VelDrift, relative tiering) + validation harness | done |
 
 Build one module at a time. Use plan mode for each new module.
 
@@ -72,7 +73,10 @@ a straight 16th grid).
 **Profile storage format:** List of `(offset_ms, vel_delta)` tuple pairs.
 Do NOT store as separate lists — that breaks the v2 KDE upgrade path.
 `offset_ms`: positive = late, negative = early.
-`vel_delta`: delta from median velocity for that bucket, not raw velocity.
+`vel_delta` (schema v2, module 13): velocity residual vs the shrunk
+`(take, grid_position, instrument[, tier])` mean, each emitted bucket de-biased to
+mean ~0 — NOT raw velocity, and no longer the v1 bucket-median delta (that sampled
+the user's accent structure as noise). See module 13 notes.
 
 **Sparse fallback order:**
 1. `(genre, beat_type, instrument)` — exact
@@ -84,7 +88,9 @@ Do NOT store as separate lists — that breaks the v2 KDE upgrade path.
 profile build. Hi-hats and cymbals are exempt.
 
 **Intensity:** Scales sampled deltas linearly toward zero —
-`applied = sampled * intensity`. Do not clamp before scaling.
+`applied = sampled * intensity`. Do not clamp before scaling. Default **0.35**
+(ear-tested, 2026-07); 1.0 reproduces GMD's raw within-take spread and sounds
+loose — see the default-intensity notes below. Range stays un-capped.
 
 **v2 upgrade point:** `humanise.py` samples offsets and vel_deltas independently
 in v1. The v2 upgrade replaces this with `scipy.stats.gaussian_kde` — the tuple
@@ -343,7 +349,9 @@ Key design decisions (all from three plan reviews — do not undo without re-che
 - `velocity_only` `continue`s before the timing block → clock never advances.
 
 **Output autocorrelation is `(1 - RESIDUAL_SHARE) * phi`**, not phi (the independent residual
-dilutes the drift's phi-autocorrelation). Tests assert this exact value.
+dilutes the drift's phi-autocorrelation). The exact-constant tests that asserted this value
+were retired in module 13 (O5) in favour of invariants — do not reintroduce exact-constant
+locks; see module 13 notes.
 
 **Demo:** `scripts/make_demo.py` writes `demo/rock_4bar_{input,phi0,phi05}.mid` — same seed,
 phi 0.0 vs 0.5, for A/B listening in a DAW.
@@ -380,3 +388,117 @@ Safe engine fixes from the roadmap (`pocketmidi_roadmap.md`) — no GMD, no prof
   multi-track files the RNG sample order changes from track-major to time-major, so
   multi-track output differs from the old engine at ANY phi, including 0 — inherent
   to stepping one clock in performance order.
+
+## Implementation notes — module 13: velocity rebuild (schema v2)
+
+Spec: `pocketmidi_rebuild_spec.md` (v2) + `pocketmidi_rebuild_spec_addendum.md`. Shipped
+2026-07 with `pocketmidi/profiles/rock.json` rebuilt from the FULL GMD (341 rock takes,
+311 buckets). Gated on held-out data by `scripts/validate.py` (see below), then ear-tested.
+Old-schema profiles still load and run (backward compatible; their vel_delta bias is
+applied statically, never amplified).
+
+**A2 — `vel_delta` redefinition (the core fix):** residual vs the shrunk
+`(take, grid_position, instrument[, tier])` mean. Accent structure lives in the contour
+the USER programs; the v1 bucket-median delta sampled it as noise (hats jumped soft→127).
+Residual σ roughly halved (snare 20.7 → 9.9 with tier conditioning; kick 14.1, hats 20.8).
+Two REQUIRED guardrails, both asserted at build time:
+- **Per-emitted-bucket de-bias to mean ~0** (`_write` asserts it): residualising at cell
+  level does NOT zero tier-bucket means — real tier buckets carried biases up to ±28
+  pre-debias. Removed bias stored in `_meta.bucket_vel_delta_means` (diagnostics).
+- **Sparse-cell shrinkage** (`SHRINKAGE_K = 5` pseudo-counts): an n=1 cell would produce
+  a fake zero-noise residual (lone crashes/fills). Cells shrink toward the broader
+  `(take, instrument)` mean; n ≫ 5 cells are essentially untouched.
+
+**Snare tier-residualisation (addendum Fix 1):** snare alternates ghost/backbeat at ONE
+grid position across bars, so the tier-agnostic cell mean lands between the roles and the
+residual re-absorbs accent structure — snare was the one instrument that regressed at
+checkpoint 3. Tier is a per-take relative ROLE label via `_file_tier_thresholds` (the SAME
+convention runtime B4 and the harness use; GMD-absolute thresholds are the per-take
+evidence fallback). Shrinkage chain is TIER-PRESERVING: `(take,pos,inst,tier)` →
+`(take,inst,tier)` → `(take,inst)` — never the blended positional mean (that blend was the
+bug). **Snare only** (`TIER_RESIDUAL_GROUPS`): per-take two-cluster rate is 10% for snare
+vs 1–3% for kick/hats/ride. Do NOT extend by the naive variance-reduction measure — it is
+confounded (slicing pure noise by velocity-derived roles gives ~82% reduction; the
+mechanical null).
+
+**B2 — kick-only velocity drift:** a second `GrooveDrift` instance (`PHI_VEL = 0.37`,
+calibrated: train-split kick velocity lag-1 r=+0.317 / (1−RESIDUAL_SHARE) —
+`scripts/calibrate_phi.py` now has a velocity section and `--train-only`). Kick only:
+snare/hats/ride/crash measured ~white (r 0.07–0.16); no cross-instrument sharing — a
+same-tick crash/snare keeps its own draw. Runs on a THIRD dedicated RNG stream
+(`vel_seed = seed + 1_779_033_703`), which preserves both existing contracts: samples
+identical across phi, and timing identical across timing_only/default. Centred on the
+bucket's own vel_delta mean (legacy-profile bias applied statically — same guard as the
+timing clock). `timing_only` does not step the vel clock. The module-12 "phi=0 exact
+bypass" contract is now TIMING-only: velocities take the new path at all phi.
+
+**B4 — relative velocity tiering (fixes tier-collapse):** per-file tier thresholds from
+the user's own per-instrument velocities (`_file_tier_thresholds`), passed into `_lookup`
+as a thresholds override — the tier selects the TIMING bucket too. Rules: relative only
+with evidence (n ≥ 8 hits AND p90−p10 ≥ 12); exactly two distinct values → soft/hard at
+their midpoint regardless of balance (an imbalanced 14-ghost/2-accent part must not fall
+through to tertiles that collapse onto the dominant value); two-cluster parts → soft/hard
+at the dominant gap's midpoint, only when the gap ≥ 1.5× either side's spread AND both
+sides hold ≥ 15% of hits (a 3-level evenly-spaced part must get tertiles, not soft/hard);
+otherwise relative tertiles with a tie-aware re-anchor (thresholds that collapse onto a
+dominant duplicated value move to midpoints BETWEEN distinct values); absolute fallback
+otherwise; ties always share a tier.
+
+**A4 — storage contract unchanged:** values stay `[[offset_ms, vel_delta], ...]`; only
+`_meta` grew: `schema_version: 2`, `vel_delta_definition`, `bucket_vel_delta_means`,
+`vel_sigma_within`, `tier_residual_groups`. `test_shipped_profile_is_schema_v2` pins the
+shipped artifact (never ship an old-schema rebuild again). Build CLI gained
+`--split all|train` and `--output` (gate/candidate builds never touch the bundled file).
+
+**O5 — test locks retired:** the `(1-RESIDUAL_SHARE)*phi` autocorr test and the
+AR-recursion-constant test are gone, replaced by invariants: autocorr monotone in phi
+(unit + through-engine), phi=0 → no timing memory, total timing-variance budget across
+phi, seed determinism, per-bucket velocity de-bias ≈ 0. Do not reintroduce
+exact-constant locks — they fight every recalibration.
+
+**Validation harness (`scripts/validate.py`, spec Part C):** gates profile rebuilds on
+held-out GMD (take-level split: gate profile from train, eval on test). Programmed inputs
+= 16th-grid quantise + 4-level per-instrument velocity palette per take (2/8/flat as
+sensitivity). Metrics per instrument with multi-seed CIs: offset Wasserstein/KS/σ/mean,
+velocity within-position σ, adjacent-jump distribution, contour preservation (per-position
+MAE + hit-matched Spearman), lag-1 autocorr (timing pooled de-lean per calibrate_phi;
+velocity de-meaned per (take, instrument, position)), same-slot cross-instrument gap σ,
+and the anti-robotic pair from the addendum: zero micro-jump mass (|Δv| ≤ 1 fraction) and
+within-(position, role) σ with FIXED human-derived role labels — both scored TWO-SIDED
+against human, never "beat the input" (the input is a coarsened photocopy of the answer
+and wins any naive distance). The harness pins `intensity=1.0` — it measures the engine's
+full-scale reproduction of human distributions, so recorded baselines stay comparable
+regardless of the product default.
+
+**Known open items (measured, deliberately not tuned):** within-role velocity over-noise
+at full intensity (hats ~20.8 / ride ~17.5 / kick ~14.1 vs human ~6.4–8.5 within a role;
+snare fixed to gate level) — masked at the 0.35 default; snare zero-jump mass marginally
+under the gate (continuous KDE residuals rarely produce the exact velocity repeats real
+snare ghosting has).
+
+**Ear-test kit:** `scripts/make_eartest.py` — `rock_ghosts` (snare ghosts + busy 16th
+hats) and `four_floor` patterns; old/new renders, velocity-only / timing-only diagnostic
+legs (the isolated RNG streams make the decomposition exact), and a timing-only intensity
+sweep. Historical A/Bs: extract an old profile via
+`git show <commit>:pocketmidi/profiles/rock.json` and pass `--old`.
+
+## Implementation notes — default intensity 0.35 (was 1.0)
+
+Default/label change ONLY — no engine, profile, or timing-model change (commit d7cf0b6).
+
+**Ear-tested rationale:** the timing-only intensity sweep (0.3/0.5/0.7, same seed = same
+draws scaled linearly) isolated the "jagged" complaint about the rebuilt output: 0.3
+sounded good, 1.0 sloppy. 1.0 faithfully reproduces GMD's raw within-take spread (~27 ms
+timing σ) — real drummers genuinely play that loose (roadmap measured fact: "sloppy at
+1.0 is taste, not a variance bug"). 0.35 ≈ σ 10 ms on a 95 BPM pattern; for reference,
+0.5 ≈ the tighter half of GMD takes (σ ~17 ms at P10), 0.3 is tighter than nearly any
+human take in the corpus.
+
+Key decisions:
+- Range stays `FloatRange(0.0, 1.0)`, NOT hard-capped; CLI help + README steer:
+  "0.2–0.5 is the useful range; higher values reproduce raw drummer spread and will
+  sound loose."
+- `scripts/validate.py` pins `intensity=1.0` explicitly — gating is a full-scale
+  engine-vs-human comparison and must not silently move with the product default.
+- Ten mechanics tests pin `intensity=1.0` explicitly (they test engine behaviour, not
+  the default); `test_defaults` locks 0.35.
