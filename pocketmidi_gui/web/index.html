@@ -29,6 +29,7 @@
     <div id="screen-wrap">
       <canvas id="groove-screen"></canvas>
       <div id="screen-empty" class="screen-overlay visible">NO PATTERN LOADED &mdash; PRESS LOAD</div>
+      <div id="hearing-chip">&#9679; HUMANISED</div>
     </div>
     <div id="minimap-wrap">
       <canvas id="minimap"></canvas>
@@ -39,24 +40,30 @@
   <section id="controls">
     <div id="knobs">
       <div class="knob-mount big" id="knob-intensity">
-        <div class="knob"><div class="knob-cap"></div><div class="knob-pointer"></div></div>
+        <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
         <span class="ctl-label">INTENSITY</span>
-        <span class="ctl-value" id="val-intensity">0.35</span>
+        <span class="ctl-value">0.35</span>
       </div>
       <div class="knob-mount" id="knob-tightness">
-        <div class="knob"><div class="knob-cap"></div><div class="knob-pointer"></div></div>
+        <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
         <span class="ctl-label">TIGHTNESS</span>
-        <span class="ctl-value" id="val-tightness">0.40</span>
+        <span class="ctl-value">0.40</span>
       </div>
       <div class="toggle-mount" id="toggle-push">
         <div class="toggle"><div class="toggle-lever"></div></div>
         <span class="ctl-label">PUSH</span>
-        <span class="ctl-value" id="val-push">OFF</span>
+        <span class="ctl-value">OFF</span>
+      </div>
+      <div class="mini-toggle" id="toggle-allch" title="Humanise drum-range notes on every MIDI channel, not just channel 10 (applies on next humanise)">
+        <div class="mini-led"></div>
+        <span class="ctl-label">ALL CH</span>
       </div>
     </div>
     <div id="buttons">
       <button id="btn-load"     class="pad pad-red">LOAD</button>
       <button id="btn-humanise" class="pad pad-orange" disabled>HUMANISE</button>
+      <button id="btn-newtake"  class="pad pad-orange pad-small" disabled
+              title="Same settings, new dice — a different take">NEW<br>TAKE</button>
       <button id="btn-play"     class="pad pad-yellow" disabled>PLAY</button>
       <button id="btn-ab"       class="pad pad-cream" disabled>A/B</button>
       <button id="btn-export"   class="pad pad-cream" disabled>EXPORT</button>
@@ -68,6 +75,8 @@
 
 <script src="bridge.js"></script>
 <script src="screen.js"></script>
+<script src="knobs.js"></script>
+<script src="audio.js"></script>
 <script src="main.js"></script>
 </body>
 </html>

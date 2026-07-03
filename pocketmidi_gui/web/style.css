@@ -145,6 +145,26 @@ html, body {
 
 .screen-overlay.visible { display: flex; }
 
+#hearing-chip {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  display: none;
+  padding: 3px 9px;
+  border-radius: 3px;
+  font-size: 9px;
+  letter-spacing: 2px;
+  color: #ffd88a;
+  background: rgba(20, 16, 8, 0.72);
+  border: 1px solid rgba(255, 182, 72, 0.35);
+  text-shadow: 0 0 8px rgba(255, 182, 72, 0.5);
+  pointer-events: none;
+}
+
+#hearing-chip.visible { display: block; }
+#hearing-chip.orig { color: #bcd2e2; border-color: rgba(165, 186, 200, 0.45);
+                     text-shadow: 0 0 8px rgba(165, 186, 200, 0.5); }
+
 #minimap-wrap {
   height: 44px;
   border-radius: 4px;
@@ -215,6 +235,13 @@ html, body {
   box-shadow: inset 0 1px 2px rgba(255,255,255,0.1);
 }
 
+.knob-rotor {
+  position: absolute;
+  inset: 0;
+  transform-origin: 50% 50%;    /* the rotor spins; the knob face and its
+                                   highlight stay put */
+}
+
 .knob-pointer {
   position: absolute;
   left: 50%; top: 6%;
@@ -223,7 +250,6 @@ html, body {
   border-radius: 2px;
   background: var(--cream);
   box-shadow: 0 0 3px rgba(0,0,0,0.6);
-  transform-origin: 50% 147%;   /* rotates about knob centre */
 }
 
 .ctl-label { font-size: 10px; font-weight: 700; letter-spacing: 2px; color: var(--label); }
@@ -251,6 +277,32 @@ html, body {
 
 .toggle.on .toggle-lever { bottom: 27px; background: radial-gradient(circle at 40% 30%, var(--orange), #8a4517); }
 
+.mini-toggle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  align-self: center;
+  padding: 8px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mini-toggle .mini-led {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: #2c2c31;
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
+}
+
+.mini-toggle.on .mini-led {
+  background: var(--yellow);
+  box-shadow: 0 0 6px 1px rgba(232,183,60,0.5);
+}
+
+.mini-toggle .ctl-label { color: var(--label-dim); font-size: 8px; }
+.mini-toggle.on .ctl-label { color: var(--label); }
+
 /* ---------- button row ---------- */
 
 #buttons { display: flex; align-items: center; gap: 14px; }
@@ -276,6 +328,14 @@ html, body {
 }
 
 .pad:disabled { filter: grayscale(0.75) brightness(0.55); cursor: default; }
+
+.pad-small {
+  min-width: 54px;
+  padding: 8px 8px 6px;
+  font-size: 9px;
+  line-height: 1.5;
+  letter-spacing: 1.5px;
+}
 
 .pad-red    { background: linear-gradient(180deg, #e35a44, var(--red)); }
 .pad-orange { background: linear-gradient(180deg, #ef8c3e, var(--orange)); }

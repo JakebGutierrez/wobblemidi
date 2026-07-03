@@ -19,7 +19,12 @@ const grooveScreen = (() => {
   const GUTTER_W = 78;
   const TAIL_MS = 500;         // breathing room after the last hit
   const MIN_SPAN = 250;        // ms — max zoom in
-  const GHOST_ALPHA = 0.30;    // original positions under a humanised overlay
+  // Overlay encoding: originals render as cool-grey filled ghosts (clearly "the
+  // before" against the warm lane colours), humanised marks sit on top, and a
+  // bright whisker spans ghost→landing so the shift reads even when small.
+  const GHOST_FILL = "rgba(128, 148, 164, 0.45)";
+  const GHOST_EDGE = "rgba(165, 186, 200, 0.8)";
+  const WHISKER = "rgba(255, 244, 214, 0.85)";
 
   let canvas, ctx, mmCanvas, mmCtx;
   let original = null;
@@ -28,6 +33,8 @@ const grooveScreen = (() => {
   let viewSpan = 8000;         // ms across the zoom window
   let playheadMs = null;
   let follow = false;          // auto-scroll to keep playhead in view
+  let startMarkerMs = null;    // click-set play-from position
+  let onPickCb = null;
   let dpr = window.devicePixelRatio || 1;
 
   // ---- helpers -------------------------------------------------------------
@@ -107,6 +114,23 @@ const grooveScreen = (() => {
     ctx.fillStyle = "rgba(255,182,72,0.25)";
     ctx.fillRect(GUTTER_W, RULER_H - 1, w - GUTTER_W, 1);
 
+    // overlay legend (only when a humanised render is on screen)
+    if (humanised) {
+      ctx.font = "8.5px 'Futura', 'Avenir Next', sans-serif";
+      let lx = w - 172;
+      ctx.fillStyle = GHOST_FILL;
+      ctx.fillRect(lx, 6, 8, 9);
+      ctx.strokeStyle = GHOST_EDGE;
+      ctx.strokeRect(lx + 0.5, 6.5, 7, 8);
+      ctx.fillStyle = "rgba(200,215,225,0.75)";
+      ctx.fillText("ORIG", lx + 12, 14);
+      lx += 48;
+      ctx.fillStyle = "#e8b73c";
+      ctx.fillRect(lx, 6, 8, 9);
+      ctx.fillStyle = "rgba(255,182,72,0.8)";
+      ctx.fillText("HUMANISED", lx + 12, 14);
+    }
+
     // hits — with a humanised render, originals become ghosts underneath
     if (humanised) drawHits(original.hits, laneIdx, laneY, laneH, w, true);
     drawHits(d.hits, laneIdx, laneY, laneH, w, false);
@@ -123,6 +147,25 @@ const grooveScreen = (() => {
       ctx.fillText(LANE_LABELS[l] || l.toUpperCase(), 10, laneY(i) + laneH / 2 + 3.5);
       ctx.globalAlpha = 1;
     });
+
+    // play-from marker (click to set)
+    if (startMarkerMs !== null && startMarkerMs >= viewStart && startMarkerMs <= viewStart + viewSpan) {
+      const x = xOf(startMarkerMs, w);
+      ctx.strokeStyle = "rgba(236,226,204,0.55)";
+      ctx.setLineDash([3, 4]);
+      ctx.beginPath();
+      ctx.moveTo(x, RULER_H);
+      ctx.lineTo(x, h);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(236,226,204,0.8)";
+      ctx.beginPath();
+      ctx.moveTo(x - 4, RULER_H - 6);
+      ctx.lineTo(x + 4, RULER_H - 6);
+      ctx.lineTo(x, RULER_H);
+      ctx.closePath();
+      ctx.fill();
+    }
 
     // playhead
     if (playheadMs !== null && playheadMs >= viewStart && playheadMs <= viewStart + viewSpan) {
@@ -146,13 +189,22 @@ const grooveScreen = (() => {
       const y = laneY(i) + laneH - hh - 1;
       const color = LANE_COLORS[hit.lane] || "#e8b73c";
       if (asGhost) {
-        ctx.globalAlpha = GHOST_ALPHA;
-        ctx.strokeStyle = color;
+        ctx.fillStyle = GHOST_FILL;
+        ctx.fillRect(x - markW / 2, y, markW, hh);
+        ctx.strokeStyle = GHOST_EDGE;
         ctx.lineWidth = 1;
-        ctx.strokeRect(x - markW / 2, y, markW, hh);
-        ctx.globalAlpha = 1;
+        ctx.strokeRect(x - markW / 2 + 0.5, y + 0.5, markW - 1, hh - 1);
       } else {
-        ctx.globalAlpha = 0.55 + 0.45 * v;
+        // displacement whisker: original position → landing position
+        if (hit.orig_ms !== undefined) {
+          const gx = xOf(hit.orig_ms, w);
+          if (Math.abs(gx - x) > 1.25) {
+            ctx.fillStyle = WHISKER;
+            ctx.fillRect(Math.min(gx, x), laneY(i) + 2.5, Math.abs(gx - x), 1.4);
+            ctx.fillRect(gx - 0.7, laneY(i) + 1, 1.4, 4.5);   // foot at the origin
+          }
+        }
+        ctx.globalAlpha = 0.7 + 0.3 * v;
         ctx.fillStyle = color;
         ctx.fillRect(x - markW / 2, y, markW, hh);
         ctx.globalAlpha = 1;
@@ -209,21 +261,35 @@ const grooveScreen = (() => {
     let dragging = false;
     let dragStartX = 0;
     let dragStartView = 0;
+    let dragMoved = 0;
 
     canvas.addEventListener("mousedown", (e) => {
       dragging = true;
       dragStartX = e.offsetX;
       dragStartView = viewStart;
+      dragMoved = 0;
     });
     window.addEventListener("mousemove", (e) => {
       if (!dragging) return;
       const { w } = cssSize(canvas);
       const dx = e.clientX - canvas.getBoundingClientRect().left - dragStartX;
+      dragMoved = Math.max(dragMoved, Math.abs(dx));
       viewStart = dragStartView - dx * (viewSpan / (w - GUTTER_W));
       follow = false;
       redraw();
     });
-    window.addEventListener("mouseup", () => { dragging = false; });
+    window.addEventListener("mouseup", (e) => {
+      if (dragging && dragMoved < 4 && original && onPickCb) {
+        // a click, not a pan: set the play-from position
+        const { w } = cssSize(canvas);
+        const x = e.clientX - canvas.getBoundingClientRect().left;
+        if (x > GUTTER_W && e.target === canvas) {
+          const ms = msAt(x, w);
+          if (ms >= 0 && ms <= durationMs()) onPickCb(ms);
+        }
+      }
+      dragging = false;
+    });
 
     canvas.addEventListener("wheel", (e) => {
       e.preventDefault();
@@ -295,6 +361,17 @@ const grooveScreen = (() => {
     redraw();
   }
 
+  function setView(startMs, spanMs) {
+    viewStart = startMs;
+    viewSpan = spanMs;
+    redraw();
+  }
+
+  function setStartMarker(ms) {
+    startMarkerMs = ms;
+    redraw();
+  }
+
   function setPlayhead(ms, followPlayhead = true) {
     playheadMs = ms;
     follow = followPlayhead && ms !== null;
@@ -304,7 +381,10 @@ const grooveScreen = (() => {
     redraw();
   }
 
-  return { init, setData, setPlayhead, redraw };
+  return {
+    init, setData, setPlayhead, setView, setStartMarker, redraw,
+    onPick: (fn) => { onPickCb = fn; },
+  };
 })();
 
 window.grooveScreen = grooveScreen;
