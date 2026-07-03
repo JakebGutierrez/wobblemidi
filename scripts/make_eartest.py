@@ -1,13 +1,18 @@
 """Generate the module-13 velocity-rebuild A/B ear test.
 
-Writes a programmed 8-bar rock pattern with snare ghosts and busy 16th hi-hats
-(the two cases the velocity rebuild targets), then humanises it twice with the
-SAME seed and default settings — once with the old bundled profile, once with
-the rebuilt candidate — so the two results can be A/B'd in a DAW:
+Writes two programmed 8-bar rock patterns — "rock_ghosts" (snare ghosts + busy
+three-level 16th hi-hats, the cases the velocity rebuild targets) and
+"four_floor" (basic four-on-the-floor, the plainest groove test) — then
+humanises each twice with the SAME seed and default settings, once per profile,
+so the results can be A/B'd in a DAW:
 
-    demo/eartest/rock_ghosts_input.mid   the programmed pattern (on-grid palette)
-    demo/eartest/rock_ghosts_old.mid     old profile (pocketmidi/profiles/rock.json)
-    demo/eartest/rock_ghosts_new.mid     rebuilt candidate profile
+    demo/eartest/{pattern}_input.mid   the programmed pattern (on-grid palette)
+    demo/eartest/{pattern}_old.mid     --old profile ("before")
+    demo/eartest/{pattern}_new.mid     --candidate profile ("after")
+
+To A/B against a historical profile, extract it from git first, e.g.:
+    git show <commit>:pocketmidi/profiles/rock.json > demo/eartest/before.json
+    python scripts/make_eartest.py --old demo/eartest/before.json
 
 What to listen for: with the old profile, snare ghosts jump loud / backbeats duck
 (accent structure sampled as noise) and the hats machine-gun between levels; with
@@ -41,7 +46,7 @@ KICK, SNARE, HAT_CLOSED, HAT_OPEN, CRASH = 36, 38, 42, 46, 49
 
 # One bar on the 16th grid (positions 0-15). (position, note, velocity, bar_filter)
 # bar_filter: None = every bar, else a predicate on the 0-based bar index.
-PATTERN: list[tuple[int, int, int, object]] = [
+GHOSTS_PATTERN: list[tuple[int, int, int, object]] = [
     # kick — two-level pattern, syncopated push into beat 3
     (0,  KICK, 112, None),
     (6,  KICK, 96,  None),
@@ -62,12 +67,23 @@ PATTERN: list[tuple[int, int, int, object]] = [
     (0, CRASH, 110, lambda bar: bar == 0),
 ]
 
+# Basic four-on-the-floor rock beat: kick on every quarter, backbeat snare,
+# straight accented 8th hats. No ghosts — the plainest possible groove test.
+FOUR_FLOOR_PATTERN: list[tuple[int, int, int, object]] = [
+    (0,  KICK, 112, None), (4, KICK, 112, None), (8, KICK, 112, None), (12, KICK, 112, None),
+    (4,  SNARE, 106, None), (12, SNARE, 106, None),
+    *[(p, HAT_CLOSED, 92 if p % 4 == 0 else 70, None) for p in range(0, 16, 2)],
+    (0, CRASH, 110, lambda bar: bar == 0),
+]
 
-def build_input() -> mido.MidiFile:
+PATTERNS = {"rock_ghosts": GHOSTS_PATTERN, "four_floor": FOUR_FLOOR_PATTERN}
+
+
+def build_input(pattern: list) -> mido.MidiFile:
     events = []   # (tick, off_first_priority, msg)
     for bar in range(BARS):
         bar_tick = bar * 16 * SIXTEENTH
-        for pos, note, vel, cond in PATTERN:
+        for pos, note, vel, cond in pattern:
             if cond is not None and not cond(bar):
                 continue
             on = bar_tick + pos * SIXTEENTH
@@ -109,22 +125,27 @@ def main(old_profile: Path, candidate: Path, seed: int, out_dir: Path,
     """Write input/old/new ear-test files for the velocity-rebuild A/B."""
     timing_sweep = [float(s) for s in timing_sweep.split(",") if s.strip()]
     out_dir.mkdir(parents=True, exist_ok=True)
-    input_path = out_dir / "rock_ghosts_input.mid"
-    build_input().save(str(input_path))
-    click.echo(f"input:  {input_path}")
 
-    for label, prof_path in (("old", old_profile), ("new", candidate)):
-        out_path = out_dir / f"rock_ghosts_{label}.mid"
-        humanise(input_path, out_path, load_profile(prof_path),
-                 genre="rock", beat_type="beat", seed=seed)
-        click.echo(f"{label}:    {out_path}   (profile: {prof_path})")
-
-    # Diagnostic legs: each humanisation axis in isolation, candidate profile only.
-    # The RNG streams are isolated by design, so with the same seed these decompose
-    # the full render exactly: new_velonly carries new.mid's velocities on the
-    # input's grid timing, and new_timingonly carries new.mid's timing with the
-    # input's programmed velocities.
+    old_prof = load_profile(old_profile)
     cand_prof = load_profile(candidate)
+
+    for pname, pattern in PATTERNS.items():
+        input_path = out_dir / f"{pname}_input.mid"
+        build_input(pattern).save(str(input_path))
+        click.echo(f"{pname} input:  {input_path}")
+        for label, prof, prof_path in (("old", old_prof, old_profile),
+                                       ("new", cand_prof, candidate)):
+            out_path = out_dir / f"{pname}_{label}.mid"
+            humanise(input_path, out_path, prof,
+                     genre="rock", beat_type="beat", seed=seed)
+            click.echo(f"{pname} {label}:    {out_path}   (profile: {prof_path})")
+
+    # Diagnostic legs (rock_ghosts only): each humanisation axis in isolation,
+    # candidate profile only. The RNG streams are isolated by design, so with the
+    # same seed these decompose the full render exactly: new_velonly carries
+    # new.mid's velocities on the input's grid timing, and new_timingonly carries
+    # new.mid's timing with the input's programmed velocities.
+    input_path = out_dir / "rock_ghosts_input.mid"
     for label, kwargs in (("new_velonly", {"velocity_only": True}),
                           ("new_timingonly", {"timing_only": True})):
         out_path = out_dir / f"rock_ghosts_{label}.mid"
