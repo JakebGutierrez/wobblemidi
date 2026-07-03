@@ -19,14 +19,20 @@ dependencies = [
 
 [project.scripts]
 pocketmidi = "pocketmidi.cli:main"
+pocketmidi-gui = "pocketmidi_gui.app:main"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+]
+gui = [
+    "pywebview>=6",
 ]
 
 [tool.hatch.build]
 include = [
     "pocketmidi/**/*.py",
     "pocketmidi/profiles/*.json",
+    "pocketmidi_gui/**/*.py",
+    "pocketmidi_gui/web/**",
 ]
