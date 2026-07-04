@@ -93,11 +93,11 @@ class Api:
             return {"ok": False, "error": self._session_error}
         return session.humanise_current(params)
 
-    def reroll(self, params: dict) -> dict:
+    def undo(self) -> dict:
         session = self._get_session()
         if session is None:
             return {"ok": False, "error": self._session_error}
-        return session.reroll(params)
+        return session.undo()
 
     def export_midi(self) -> dict:
         session = self._get_session()

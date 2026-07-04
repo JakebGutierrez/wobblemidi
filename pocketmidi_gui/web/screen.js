@@ -40,7 +40,12 @@ const grooveScreen = (() => {
   let playheadMs = null;
   let follow = false;          // auto-scroll to keep playhead in view
   let startMarkerMs = null;    // click-set play-from position
+  let selectedLane = null;     // lane-select scope (gutter click)
+  let overriddenLanes = [];    // lanes with a per-lane intensity override
   let onPickCb = null;
+  let onLaneCb = null;
+  let onScrubMoveCb = null;
+  let onScrubEndCb = null;
   let dpr = window.devicePixelRatio || 1;
 
   // ---- helpers -------------------------------------------------------------
@@ -91,10 +96,14 @@ const grooveScreen = (() => {
     const laneIdx = {};
     lanes.forEach((l, i) => { laneIdx[l] = i; });
 
-    // lane row shading + separators
+    // lane row shading + separators (+ selection tint)
     for (let i = 0; i < lanes.length; i++) {
       ctx.fillStyle = i % 2 ? "rgba(255,255,255,0.016)" : "rgba(255,255,255,0.005)";
       ctx.fillRect(GUTTER_W, laneY(i), w - GUTTER_W, laneH);
+      if (lanes[i] === selectedLane) {
+        ctx.fillStyle = "rgba(255,182,72,0.06)";
+        ctx.fillRect(GUTTER_W, laneY(i), w - GUTTER_W, laneH);
+      }
       ctx.fillStyle = "rgba(255,182,72,0.07)";
       ctx.fillRect(GUTTER_W, laneY(i), w - GUTTER_W, 1);
     }
@@ -136,10 +145,24 @@ const grooveScreen = (() => {
     ctx.font = "10px 'Futura', 'Avenir Next', sans-serif";
     const labelPal = paletteOf(fg);
     lanes.forEach((l, i) => {
+      const selected = l === selectedLane;
+      if (selected) {
+        ctx.fillStyle = "rgba(255,182,72,0.12)";
+        ctx.fillRect(0, laneY(i), GUTTER_W, laneH);
+      }
       ctx.fillStyle = labelPal[l] || "#e8b73c";
-      ctx.globalAlpha = 0.85;
+      ctx.globalAlpha = selected ? 1 : 0.85;
+      if (selected) ctx.font = "bold 10px 'Futura', 'Avenir Next', sans-serif";
       ctx.fillText(LANE_LABELS[l] || l.toUpperCase(), 10, laneY(i) + laneH / 2 + 3.5);
+      if (selected) ctx.font = "10px 'Futura', 'Avenir Next', sans-serif";
       ctx.globalAlpha = 1;
+      if (overriddenLanes.includes(l)) {
+        // per-lane override marker
+        ctx.beginPath();
+        ctx.arc(GUTTER_W - 9, laneY(i) + laneH / 2, 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(255,182,72,0.9)";
+        ctx.fill();
+      }
     });
 
     // play-from marker (click to set)
@@ -277,17 +300,34 @@ const grooveScreen = (() => {
 
   function bindEvents() {
     let dragging = false;
+    let scrubbing = false;
     let dragStartX = 0;
     let dragStartView = 0;
     let dragMoved = 0;
 
+    const scrubMs = (e) => {
+      const { w } = cssSize(canvas);
+      const x = e.clientX - canvas.getBoundingClientRect().left;
+      return Math.min(Math.max(msAt(Math.max(x, GUTTER_W), w), 0), durationMs());
+    };
+
     canvas.addEventListener("mousedown", (e) => {
+      // ruler band = playhead scrub, not pan
+      if (original && e.offsetY < RULER_H && e.offsetX > GUTTER_W) {
+        scrubbing = true;
+        if (onScrubMoveCb) onScrubMoveCb(scrubMs(e));
+        return;
+      }
       dragging = true;
       dragStartX = e.offsetX;
       dragStartView = viewStart;
       dragMoved = 0;
     });
     window.addEventListener("mousemove", (e) => {
+      if (scrubbing) {
+        if (onScrubMoveCb) onScrubMoveCb(scrubMs(e));
+        return;
+      }
       if (!dragging) return;
       const { w } = cssSize(canvas);
       const dx = e.clientX - canvas.getBoundingClientRect().left - dragStartX;
@@ -297,11 +337,23 @@ const grooveScreen = (() => {
       redraw();
     });
     window.addEventListener("mouseup", (e) => {
-      if (dragging && dragMoved < 4 && original && onPickCb) {
-        // a click, not a pan: set the play-from position
-        const { w } = cssSize(canvas);
+      if (scrubbing) {
+        scrubbing = false;
+        if (onScrubEndCb) onScrubEndCb(scrubMs(e));
+        return;
+      }
+      if (dragging && dragMoved < 4 && original && e.target === canvas) {
+        const { w, h } = cssSize(canvas);
         const x = e.clientX - canvas.getBoundingClientRect().left;
-        if (x > GUTTER_W && e.target === canvas) {
+        const y = e.clientY - canvas.getBoundingClientRect().top;
+        if (x <= GUTTER_W && y > RULER_H && onLaneCb) {
+          // gutter click: select/deselect a lane
+          const lanes = data().lanes;
+          const laneH = (h - RULER_H) / lanes.length;
+          const idx = Math.floor((y - RULER_H) / laneH);
+          if (idx >= 0 && idx < lanes.length) onLaneCb(lanes[idx]);
+        } else if (x > GUTTER_W && onPickCb) {
+          // body click: set the play-from position
           const ms = msAt(x, w);
           if (ms >= 0 && ms <= durationMs()) onPickCb(ms);
         }
@@ -391,6 +443,12 @@ const grooveScreen = (() => {
     redraw();
   }
 
+  function setLaneMarks(selected, overridden) {
+    selectedLane = selected;
+    overriddenLanes = overridden || [];
+    redraw();
+  }
+
   function zoomBy(factor) {
     const centre = viewStart + viewSpan / 2;
     viewSpan *= factor;
@@ -416,8 +474,10 @@ const grooveScreen = (() => {
 
   return {
     init, setData, setPlayhead, setView, setStartMarker, setAudible,
-    zoomBy, fit, redraw,
+    setLaneMarks, zoomBy, fit, redraw,
     onPick: (fn) => { onPickCb = fn; },
+    onLane: (fn) => { onLaneCb = fn; },
+    onScrub: (moveFn, endFn) => { onScrubMoveCb = moveFn; onScrubEndCb = endFn; },
   };
 })();
 

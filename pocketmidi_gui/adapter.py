@@ -195,6 +195,11 @@ class Session:
         self.original_path: Path | None = None
         self.render_path: Path | None = None
         self.seed: int | None = None
+        self.render_params: dict | None = None
+        # Single-level undo: the previous render's (path, seed, params). undo()
+        # swaps it with the current one — pressing twice is redo. Deliberately
+        # no history stack (fast workflow, no state pile-up).
+        self._prev_render: tuple[Path, int, dict] | None = None
         if profile_path is not None:
             self.profiles = load_profile(profile_path)
         else:
@@ -219,6 +224,8 @@ class Session:
         self.original_path = Path(path)
         self.render_path = None
         self.seed = None
+        self.render_params = None
+        self._prev_render = None
 
         warnings = []
         if not display["hits"]:
@@ -233,20 +240,43 @@ class Session:
             "warnings": warnings,
         }
 
-    def humanise_current(self, params: dict, new_seed: bool = False) -> dict:
-        """Render with the given params. Seed policy: first render (or reroll)
-        draws a fresh seed; subsequent renders reuse it, so knob tweaks change
-        the settings, not the dice."""
+    @staticmethod
+    def _clean_params(params: dict) -> dict:
+        lane_intensity = {
+            str(k): float(v)
+            for k, v in (params.get("lane_intensity") or {}).items()
+        }
+        return {
+            "intensity": float(params.get("intensity", 0.35)),
+            "tightness": float(params.get("tightness", 0.4)),
+            "lean": float(params.get("lean", 0.0)),
+            "all_channels": bool(params.get("all_channels", False)),
+            "lane_intensity": lane_intensity,
+        }
+
+    def _render_response(self, params: dict) -> dict:
+        original = parse_for_display(self.original_path,
+                                     all_channels=params["all_channels"])
+        humanised = parse_for_display(self.render_path,
+                                      all_channels=params["all_channels"])
+        _attach_deltas(original, humanised)
+        return {
+            "ok": True,
+            "original": original,
+            "humanised": humanised,
+            "seed": self.seed,
+            "params": params,
+            "can_undo": self._prev_render is not None,
+        }
+
+    def humanise_current(self, params: dict) -> dict:
+        """Render with the given params. Every render is a fresh take (new
+        random seed) — there is deliberately no same-seed reuse."""
         if self.original_path is None:
             return {"ok": False, "error": "No MIDI file loaded."}
 
-        intensity = float(params.get("intensity", 0.35))
-        tightness = float(params.get("tightness", 0.4))
-        push = bool(params.get("push", False))
-        all_channels = bool(params.get("all_channels", False))
-
-        if new_seed or self.seed is None:
-            self.seed = random.randrange(2**32)
+        p = self._clean_params(params)
+        seed = random.randrange(2**32)
 
         with self._lock:
             self._render_count += 1
@@ -256,38 +286,36 @@ class Session:
                     input_path=self.original_path,
                     output_path=out,
                     profiles=self.profiles,
-                    intensity=intensity,
-                    seed=self.seed,
-                    push=push,
-                    phi=tightness,
-                    all_channels=all_channels,
+                    intensity=p["intensity"],
+                    seed=seed,
+                    phi=p["tightness"],
+                    all_channels=p["all_channels"],
+                    push_amount=p["lean"],
+                    intensity_by_group=p["lane_intensity"] or None,
                 )
             except ValueError as exc:
                 return {"ok": False, "error": str(exc)}
             except Exception as exc:
                 return {"ok": False, "error": f"Humanise failed: {exc}"}
 
-        original = parse_for_display(self.original_path, all_channels=all_channels)
-        humanised = parse_for_display(out, all_channels=all_channels)
-        _attach_deltas(original, humanised)
+        if self.render_path is not None:
+            self._prev_render = (self.render_path, self.seed, self.render_params)
         self.render_path = out
+        self.seed = seed
+        self.render_params = p
+        return self._render_response(p)
 
-        return {
-            "ok": True,
-            "original": original,
-            "humanised": humanised,
-            "seed": self.seed,
-            "params": {
-                "intensity": intensity,
-                "tightness": tightness,
-                "push": push,
-                "all_channels": all_channels,
-            },
-        }
-
-    def reroll(self, params: dict) -> dict:
-        """New take: fresh seed, same settings."""
-        return self.humanise_current(params, new_seed=True)
+    def undo(self) -> dict:
+        """Swap the current render with the previous one (single level — undo
+        twice to redo). Returns the same shape as humanise_current, with the
+        restored params so the UI can snap its controls back."""
+        if self._prev_render is None:
+            return {"ok": False, "error": "Nothing to undo yet."}
+        prev_path, prev_seed, prev_params = self._prev_render
+        self._prev_render = (self.render_path, self.seed, self.render_params)
+        self.render_path, self.seed, self.render_params = (
+            prev_path, prev_seed, prev_params)
+        return self._render_response(self.render_params)
 
     def export_to(self, dest: str | Path) -> dict:
         if self.render_path is None:

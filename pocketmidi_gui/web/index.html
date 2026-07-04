@@ -33,11 +33,15 @@
     </div>
     <div id="transport">
       <button class="tbtn" id="btn-tostart" title="Back to the top (Home)">&#9198;</button>
+      <button class="tbtn" id="btn-barback" title="Back one bar (&larr;)">&laquo;</button>
+      <button class="tbtn tbtn-play" id="btn-play" disabled
+              title="Play / stop (space). Click the screen or drag the ruler to set where playback starts">PLAY</button>
+      <button class="tbtn" id="btn-barfwd" title="Forward one bar (&rarr;)">&raquo;</button>
       <span id="readout">BAR &ndash; / &ndash; &middot; 0:00.0</span>
       <span class="t-space"></span>
       <div id="version-chips">
         <button class="vchip vchip-orig" id="vchip-orig" disabled
-                title="Hear the un-humanised original (A)">ORIG</button>
+                title="Hear the un-humanised original (A)">ORIGINAL</button>
         <button class="vchip vchip-hum active" id="vchip-hum" disabled
                 title="Hear the humanised version (A)">HUMANISED</button>
       </div>
@@ -54,22 +58,27 @@
   <section id="controls">
     <div id="knobs">
       <div class="knob-mount big" id="knob-intensity"
-           title="How much humanisation is applied. 0.2–0.5 is the sweet spot; 1.0 is raw drummer spread (loose). Drag up/down · shift = fine · double-click = reset">
+           title="How much humanisation is applied. 0.2–0.5 is the sweet spot; 1.0 is raw drummer spread (loose). Click a lane on the screen to set it for just that drum. Drag up/down · shift = fine · double-click = reset">
         <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
-        <span class="ctl-label">INTENSITY</span>
+        <span class="ctl-label" id="lbl-intensity">INTENSITY</span>
         <span class="ctl-value">0.35</span>
+        <button id="btn-kit" class="kit-chip" title="Back to whole-kit scope (Esc)">KIT</button>
       </div>
       <div class="knob-mount" id="knob-tightness"
-           title="How much the kit moves as one pocket. Low = every hit drifts independently (twitchy); high = the whole kit breathes together. Drag up/down · shift = fine · double-click = reset">
+           title="How much the kit moves as one pocket — kit-wide: the whole kit shares one internal clock. Drag up/down · shift = fine · double-click = reset">
         <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
         <span class="ctl-label">TIGHTNESS</span>
         <span class="ctl-value">0.40</span>
       </div>
-      <div class="toggle-mount" id="toggle-push"
-           title="Include the source drummers' habit of leaning ahead of / behind the beat. Off = human looseness centred on the grid">
-        <div class="toggle"><div class="toggle-lever"></div></div>
-        <span class="ctl-label">PUSH</span>
-        <span class="ctl-value">OFF</span>
+      <div class="slider-mount" id="slider-lean"
+           title="Kit-wide lean. Right = the source drummers' own push/drag habits; left = the MIRROR of them (inverts their tendencies); centre = neutral, variation centred on the grid.">
+        <div class="slider-row">
+          <span class="slider-end">MIRROR</span>
+          <div class="slider-track"><div class="slider-thumb"></div></div>
+          <span class="slider-end">PUSH</span>
+        </div>
+        <span class="ctl-label">LEAN</span>
+        <span class="ctl-value">NEUTRAL</span>
       </div>
       <div class="mini-toggle" id="toggle-allch" title="Humanise drum-range notes on every MIDI channel, not just channel 10 (applies on next humanise)">
         <div class="mini-led"></div>
@@ -79,12 +88,11 @@
     <div id="buttons">
       <button id="btn-load"     class="pad pad-red">LOAD</button>
       <button id="btn-humanise" class="pad-hero" disabled
-              title="Apply real-drummer timing and velocity to the loaded MIDI">
+              title="Apply real-drummer timing and velocity — every press is a fresh take">
         <span>HUMANISE</span>
       </button>
-      <button id="btn-reroll"   class="pad pad-orange pad-small" disabled
-              title="New take: keep your settings, roll different random variation">&#9860;<br>REROLL</button>
-      <button id="btn-play"     class="pad pad-yellow" disabled title="Play / stop (space). Click the screen to set where playback starts">PLAY</button>
+      <button id="btn-undo"     class="pad pad-orange pad-small" disabled
+              title="Swap back to the previous render (press again to redo)">UNDO</button>
       <button id="btn-ab"       class="pad pad-cream" disabled title="Flip between original and humanised while playing (A)">A/B</button>
       <button id="btn-export"   class="pad pad-cream" disabled title="Save the humanised MIDI">EXPORT</button>
     </div>
@@ -96,14 +104,15 @@
     <div id="help-card">
       <div class="help-title">CONTROLS <button id="btn-help-close">&times;</button></div>
       <dl>
-        <dt>INTENSITY</dt><dd>How much humanisation. 0.2&ndash;0.5 is the sweet spot; 1.0 is raw drummer spread.</dd>
-        <dt>TIGHTNESS</dt><dd>How much the kit moves as one pocket vs every hit drifting on its own.</dd>
-        <dt>PUSH</dt><dd>Keep the source drummers' lean ahead of / behind the beat. Off = centred on the grid.</dd>
+        <dt>INTENSITY</dt><dd>How much humanisation. 0.2&ndash;0.5 is the sweet spot; 1.0 is raw drummer spread. Click a lane name on the screen to set it for just that drum (a dot marks lanes with their own setting; KIT or Esc returns to the whole kit).</dd>
+        <dt>TIGHTNESS</dt><dd>How much the kit moves as one pocket vs every hit drifting on its own. Kit-wide &mdash; the whole kit shares one internal clock, so a lane can be tighter, but not on a separate clock.</dd>
+        <dt>LEAN</dt><dd>Kit-wide. Right (push) re-applies the source drummers' own per-drum lean habits; left is the mirror image of them &mdash; it inverts those tendencies, it doesn't add a flat delay. Centre = neutral, on the grid.</dd>
         <dt>ALL CH</dt><dd>Humanise drum notes on every MIDI channel, not just channel 10.</dd>
-        <dt>HUMANISE</dt><dd>Apply the groove. <b>&#9860; REROLL</b> keeps your settings, rolls a different take.</dd>
-        <dt>ORIG / HUMANISED</dt><dd>What you're hearing &mdash; blue is the original, amber is humanised. Click (or press A) to flip, even mid-playback.</dd>
+        <dt>HUMANISE</dt><dd>Apply the groove &mdash; every press is a fresh take with your current settings. <b>UNDO</b> swaps back to the previous render (again = redo).</dd>
+        <dt>TRANSPORT</dt><dd>&#9198; top &middot; &laquo; &raquo; step a bar (&larr; &rarr;) &middot; drag the ruler or click the screen to move the playhead.</dd>
+        <dt>ORIGINAL / HUMANISED</dt><dd>What you're hearing &mdash; blue is the original, amber is humanised. Click (or press A) to flip, even mid-playback.</dd>
         <dt>ENGINE</dt><dd>Lit when the drummer profile is loaded and ready.</dd>
-        <dt>SCREEN</dt><dd>Click = set play position &middot; drag = pan &middot; &#8984;wheel = zoom &middot; double-click = fit &middot; grey/blue ghosts = the other version's positions.</dd>
+        <dt>SCREEN</dt><dd>Click = set play position &middot; drag = pan &middot; &#8984;wheel = zoom &middot; double-click = fit &middot; ghosts = the other version's positions.</dd>
       </dl>
     </div>
   </div>

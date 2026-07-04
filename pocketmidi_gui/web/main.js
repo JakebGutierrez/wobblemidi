@@ -1,17 +1,28 @@
 // main.js — top-level UI wiring: knobs → params, buttons → bridge, transport → screen.
 
+const LANE_NAMES = {
+  kick: "KICK", snare: "SNARE", hihat_closed: "HAT CL", hihat_open: "HAT OP",
+  tom_high: "TOM HI", tom_mid: "TOM MD", tom_low: "TOM LO",
+  crash: "CRASH", ride: "RIDE",
+};
+
 const state = {
   loaded: false,
   fileName: null,
-  params: { intensity: 0.35, tightness: 0.4, push: false, all_channels: false },
-  seed: null,
+  params: { intensity: 0.35, tightness: 0.4, lean: 0.0, all_channels: false },
+  laneIntensity: {},     // lane → absolute intensity override
+  selectedLane: null,    // lane-select scope for the INTENSITY knob
   busy: false,
-  humanised: false,   // a render exists
+  humanised: false,      // a render exists
+  canUndo: false,
   playFrom: 0,
   bars: [],
   durationMs: 0,
-  rerollTipShown: false,
 };
+
+let knobIntensity = null;
+let knobTightness = null;
+let sliderLean = null;
 
 const el = (id) => document.getElementById(id);
 
@@ -24,6 +35,10 @@ function toast(message, ms = 3600) {
 }
 window.toast = toast;
 
+function renderParams() {
+  return { ...state.params, lane_intensity: { ...state.laneIntensity } };
+}
+
 // ---- transport readout ---------------------------------------------------------
 
 function fmtTime(ms) {
@@ -32,14 +47,14 @@ function fmtTime(ms) {
   return `${m}:${(s - m * 60).toFixed(1).padStart(4, "0")}`;
 }
 
-function barAt(ms) {
+function barIndexAt(ms) {
   const bars = state.bars;
   let lo = 0, hi = bars.length - 1, ans = 0;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (bars[mid].ms <= ms + 1e-6) { ans = mid; lo = mid + 1; } else hi = mid - 1;
   }
-  return ans + 1;
+  return ans;
 }
 
 function updateReadout(ms) {
@@ -49,7 +64,7 @@ function updateReadout(ms) {
   }
   const clamped = Math.min(Math.max(ms, 0), state.durationMs);
   el("readout").textContent =
-    `BAR ${barAt(clamped)} / ${state.bars.length} · ${fmtTime(clamped)}`;
+    `BAR ${barIndexAt(clamped) + 1} / ${state.bars.length} · ${fmtTime(clamped)}`;
 }
 
 // ---- audible version (chips + screen + engine agree) -----------------------------
@@ -63,22 +78,45 @@ function setAudibleVersion(v) {
   el("btn-ab").classList.toggle("lit", hearing === "original");
 }
 
+// ---- lane scope ------------------------------------------------------------------
+
+function refreshLaneMarks() {
+  grooveScreen.setLaneMarks(state.selectedLane, Object.keys(state.laneIntensity));
+}
+
+function setLaneScope(lane) {
+  state.selectedLane = lane;
+  const scoped = lane !== null;
+  el("lbl-intensity").textContent =
+    scoped ? `INTENSITY · ${LANE_NAMES[lane] || lane.toUpperCase()}` : "INTENSITY";
+  el("btn-kit").classList.toggle("visible", scoped);
+  el("knob-tightness").classList.toggle("kitwide-dim", scoped);
+  el("slider-lean").classList.toggle("kitwide-dim", scoped);
+  knobIntensity.set(
+    scoped ? (state.laneIntensity[lane] ?? state.params.intensity)
+           : state.params.intensity,
+    false,
+  );
+  refreshLaneMarks();
+}
+
 // ---- button state ------------------------------------------------------------------
 
 function updateButtons() {
-  const { loaded, busy, humanised } = state;
+  const { loaded, busy, humanised, canUndo } = state;
   el("btn-load").disabled = busy;
   el("btn-humanise").disabled = !loaded || busy;
-  el("btn-reroll").disabled = !humanised || busy;
+  el("btn-undo").disabled = !canUndo || busy;
   el("btn-play").disabled = !loaded || busy;
   el("btn-ab").disabled = !humanised || busy;
   el("btn-export").disabled = !humanised || busy;
   el("vchip-orig").disabled = !humanised || busy;
   el("vchip-hum").disabled = !humanised || busy;
-  el("btn-tostart").disabled = !loaded;
-  el("btn-zoomin").disabled = !loaded;
-  el("btn-zoomout").disabled = !loaded;
-  el("btn-fit").disabled = !loaded;
+  for (const id of ["btn-tostart", "btn-barback", "btn-barfwd",
+                    "btn-zoomin", "btn-zoomout", "btn-fit"]) {
+    el(id).disabled = !loaded;
+  }
+  el("btn-humanise").classList.toggle("armed", loaded && !humanised && !busy);
 }
 
 function setBusy(busy) {
@@ -118,11 +156,13 @@ function applyLoad(res) {
   audioEngine.stop();
   state.loaded = true;
   state.fileName = res.file_name;
-  state.seed = null;
   state.humanised = false;
+  state.canUndo = false;
   state.playFrom = 0;
+  state.laneIntensity = {};
   state.bars = res.original.bars;
   state.durationMs = res.original.duration_ms;
+  setLaneScope(null);
   el("screen-empty").classList.remove("visible");
   grooveScreen.setData(res.original, null);
   grooveScreen.setStartMarker(null);
@@ -145,33 +185,57 @@ async function doLoad() {
   applyLoad(res);
 }
 
-async function renderWith(call) {
+function applyRender(res) {
+  state.humanised = true;
+  state.canUndo = !!res.can_undo;
+  grooveScreen.setData(res.original, res.humanised);
+  audioEngine.setSongs(res.original.hits, res.humanised.hits,
+                       res.original.duration_ms);
+  setAudibleVersion("humanised");
+  refreshLaneMarks();
+}
+
+async function doHumanise() {
   if (!state.loaded || state.busy) return;
   audioEngine.stop();
   setBusy(true);
   try {
-    const res = await call(state.params);
+    const res = await bridge.humanise(renderParams());
     if (!res.ok) { toast(`Humanise failed: ${res.error}`); return; }
-    state.seed = res.seed;
-    state.humanised = true;
-    grooveScreen.setData(res.original, res.humanised);
-    audioEngine.setSongs(res.original.hits, res.humanised.hits, res.original.duration_ms);
-    setAudibleVersion("humanised");
+    applyRender(res);
     const hero = el("btn-humanise");
     hero.classList.remove("flash");
     void hero.offsetWidth;   // restart the animation
     hero.classList.add("flash");
-    if (!state.rerollTipShown) {
-      state.rerollTipShown = true;
-      toast("Humanised. Tip: ⚄ REROLL keeps these settings but rolls a different take.", 5000);
-    }
   } finally {
     setBusy(false);
   }
 }
 
-const doHumanise = () => renderWith((p) => bridge.humanise(p));
-const doReroll = () => renderWith((p) => bridge.reroll(p));
+async function doUndo() {
+  if (!state.canUndo || state.busy) return;
+  audioEngine.stop();
+  setBusy(true);
+  try {
+    const res = await bridge.undo();
+    if (!res.ok) { toast(res.error); return; }
+    // restore the settings that produced the restored render
+    const p = res.params || {};
+    state.params.intensity = p.intensity ?? state.params.intensity;
+    state.params.tightness = p.tightness ?? state.params.tightness;
+    state.params.lean = p.lean ?? state.params.lean;
+    state.params.all_channels = !!p.all_channels;
+    state.laneIntensity = { ...(p.lane_intensity || {}) };
+    knobTightness.set(state.params.tightness, false);
+    sliderLean.set(state.params.lean, false);
+    el("toggle-allch").classList.toggle("on", state.params.all_channels);
+    setLaneScope(state.selectedLane);   // re-sync knob value + marks under new params
+    applyRender(res);
+    toast("Restored previous render (UNDO again = redo).");
+  } finally {
+    setBusy(false);
+  }
+}
 
 function doPlay() {
   if (!state.loaded || state.busy) return;
@@ -184,15 +248,28 @@ function doAB() {
   setAudibleVersion(audioEngine.getAudible() === "humanised" ? "original" : "humanised");
 }
 
+function seekTo(ms, restart = true) {
+  state.playFrom = Math.min(Math.max(ms, 0), state.durationMs);
+  grooveScreen.setStartMarker(state.playFrom);
+  updateReadout(state.playFrom);
+  if (restart && audioEngine.isPlaying()) {
+    audioEngine.stop();
+    audioEngine.play(state.playFrom);
+  }
+}
+
 function doToStart() {
-  state.playFrom = 0;
+  if (!state.loaded) return;
+  seekTo(0);
   grooveScreen.setStartMarker(null);
   grooveScreen.setView(0);   // scroll home, keep the current zoom
-  updateReadout(0);
-  if (audioEngine.isPlaying()) {
-    audioEngine.stop();
-    audioEngine.play(0);
-  }
+}
+
+function stepBar(direction) {
+  if (!state.loaded || !state.bars.length) return;
+  const idx = barIndexAt(state.playFrom);
+  const next = Math.min(Math.max(idx + direction, 0), state.bars.length - 1);
+  seekTo(state.bars[next].ms);
 }
 
 async function doExport() {
@@ -208,17 +285,39 @@ async function doExport() {
 (async () => {
   grooveScreen.init(el("groove-screen"), el("minimap"));
 
-  makeKnob({
+  knobIntensity = makeKnob({
     mount: el("knob-intensity"), min: 0, max: 1, value: 0.35, def: 0.35,
-    onInput: (v) => { state.params.intensity = v; },
+    onInput: (v) => {
+      if (state.selectedLane) {
+        state.laneIntensity[state.selectedLane] = v;
+        refreshLaneMarks();
+      } else {
+        state.params.intensity = v;
+      }
+    },
+    onReset: () => {
+      if (state.selectedLane) {
+        // clear this lane's override → it follows the master knob again
+        delete state.laneIntensity[state.selectedLane];
+        knobIntensity.set(state.params.intensity, false);
+        refreshLaneMarks();
+      } else {
+        knobIntensity.set(0.35);
+      }
+    },
   });
-  makeKnob({
+  knobTightness = makeKnob({
     mount: el("knob-tightness"), min: 0, max: 0.95, value: 0.4, def: 0.4,
     onInput: (v) => { state.params.tightness = v; },
   });
-  makeToggle({
-    mount: el("toggle-push"), value: false,
-    onInput: (v) => { state.params.push = v; },
+  sliderLean = makeSlider({
+    mount: el("slider-lean"), min: -1, max: 1, value: 0, def: 0, detent: 0.06,
+    fmt: (v) => {
+      if (v === 0) return "NEUTRAL";
+      const pct = Math.round(Math.abs(v) * 100);
+      return v > 0 ? `PUSH ${pct}%` : `MIRROR ${pct}%`;
+    },
+    onInput: (v) => { state.params.lean = v; },
   });
   el("toggle-allch").addEventListener("click", () => {
     const on = el("toggle-allch").classList.toggle("on");
@@ -229,16 +328,19 @@ async function doExport() {
 
   el("btn-load").addEventListener("click", doLoad);
   el("btn-humanise").addEventListener("click", doHumanise);
-  el("btn-reroll").addEventListener("click", doReroll);
+  el("btn-undo").addEventListener("click", doUndo);
   el("btn-play").addEventListener("click", doPlay);
   el("btn-ab").addEventListener("click", doAB);
   el("btn-export").addEventListener("click", doExport);
   el("btn-tostart").addEventListener("click", doToStart);
+  el("btn-barback").addEventListener("click", () => stepBar(-1));
+  el("btn-barfwd").addEventListener("click", () => stepBar(1));
   el("btn-zoomin").addEventListener("click", () => grooveScreen.zoomBy(0.65));
   el("btn-zoomout").addEventListener("click", () => grooveScreen.zoomBy(1.55));
   el("btn-fit").addEventListener("click", () => grooveScreen.fit());
   el("vchip-orig").addEventListener("click", () => setAudibleVersion("original"));
   el("vchip-hum").addEventListener("click", () => setAudibleVersion("humanised"));
+  el("btn-kit").addEventListener("click", () => setLaneScope(null));
 
   el("btn-help").addEventListener("click", () => el("help-overlay").classList.add("visible"));
   el("btn-help-close").addEventListener("click", () => el("help-overlay").classList.remove("visible"));
@@ -258,21 +360,28 @@ async function doExport() {
   });
   audioEngine.onTransport(updateTransport);
 
-  grooveScreen.onPick((ms) => {
-    state.playFrom = ms;
-    grooveScreen.setStartMarker(ms);
-    updateReadout(ms);
-    if (audioEngine.isPlaying()) {
-      audioEngine.stop();
-      audioEngine.play(ms);
-    }
+  grooveScreen.onPick((ms) => seekTo(ms));
+  grooveScreen.onLane((lane) => {
+    setLaneScope(lane === state.selectedLane ? null : lane);
   });
+  grooveScreen.onScrub(
+    (ms) => {   // move: follow with marker + readout, no audio churn
+      grooveScreen.setStartMarker(ms);
+      updateReadout(ms);
+    },
+    (ms) => seekTo(ms),   // release: commit (restarts if playing)
+  );
 
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") { e.preventDefault(); doPlay(); }
     else if (e.code === "KeyA" && !e.metaKey && !e.ctrlKey) doAB();
     else if (e.code === "Home") doToStart();
-    else if (e.code === "Escape") el("help-overlay").classList.remove("visible");
+    else if (e.code === "ArrowLeft") stepBar(-1);
+    else if (e.code === "ArrowRight") stepBar(1);
+    else if (e.code === "Escape") {
+      el("help-overlay").classList.remove("visible");
+      if (state.selectedLane) setLaneScope(null);
+    }
   });
 
   updateButtons();

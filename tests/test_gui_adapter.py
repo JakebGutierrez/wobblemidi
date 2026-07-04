@@ -203,7 +203,8 @@ class TestSessionLoad:
         assert "No MIDI file loaded" in res["error"]
 
 
-PARAMS = {"intensity": 0.35, "tightness": 0.4, "push": False, "all_channels": False}
+PARAMS = {"intensity": 0.35, "tightness": 0.4, "lean": 0.0, "all_channels": False,
+          "lane_intensity": {}}
 
 
 class TestSessionHumanise:
@@ -212,6 +213,7 @@ class TestSessionHumanise:
         res = session.humanise_current(dict(PARAMS))
         assert res["ok"] is True
         assert isinstance(res["seed"], int)
+        assert res["can_undo"] is False       # first render — nothing to undo
         assert session.render_path is not None and session.render_path.exists()
         orig, new = res["original"], res["humanised"]
         assert len(new["hits"]) == len(orig["hits"])
@@ -219,21 +221,27 @@ class TestSessionHumanise:
         for h in new["hits"]:
             assert h["ms"] == pytest.approx(h["orig_ms"] + h["delta_ms"])
 
-    def test_seed_stable_across_knob_tweaks(self, session, tmp_path):
+    def test_every_render_is_a_new_take(self, session, tmp_path):
         session.load(_two_bar_beat(tmp_path))
         r1 = session.humanise_current(dict(PARAMS))
         r2 = session.humanise_current(dict(PARAMS))
-        assert r1["seed"] == r2["seed"]
-        assert [h["ms"] for h in r1["humanised"]["hits"]] == \
-               [h["ms"] for h in r2["humanised"]["hits"]]
-        assert [h["velocity"] for h in r1["humanised"]["hits"]] == \
-               [h["velocity"] for h in r2["humanised"]["hits"]]
-
-    def test_reroll_changes_seed(self, session, tmp_path):
-        session.load(_two_bar_beat(tmp_path))
-        r1 = session.humanise_current(dict(PARAMS))
-        r2 = session.reroll(dict(PARAMS))
         assert r1["seed"] != r2["seed"]
+
+    def test_lane_intensity_passthrough(self, session, tmp_path):
+        session.load(_two_bar_beat(tmp_path))
+        res = session.humanise_current(
+            {**PARAMS, "intensity": 1.0, "lane_intensity": {"kick": 0.0}})
+        assert res["ok"] is True
+        kick = [h for h in res["humanised"]["hits"] if h["lane"] == "kick"]
+        other = [h for h in res["humanised"]["hits"] if h["lane"] != "kick"]
+        assert kick and all(h["delta_ms"] == 0 and h["delta_vel"] == 0 for h in kick)
+        assert any(h["delta_ms"] != 0 for h in other)
+
+    def test_engine_validation_surfaces_as_error(self, session, tmp_path):
+        session.load(_two_bar_beat(tmp_path))
+        res = session.humanise_current({**PARAMS, "lean": 2.0})
+        assert res["ok"] is False
+        assert "push_amount" in res["error"]
 
     def test_rehumanise_always_from_original(self, session, tmp_path):
         """Render 2 at intensity 0 must land on the ORIGINAL grid — proving it
@@ -254,6 +262,44 @@ class TestSessionHumanise:
         session.load(_two_bar_beat(tmp_path))
         assert session.seed is None
         assert session.render_path is None
+        assert session.undo()["ok"] is False   # undo history cleared with the file
+
+
+class TestSessionUndo:
+    def test_undo_before_second_render(self, session, tmp_path):
+        session.load(_two_bar_beat(tmp_path))
+        assert session.undo()["ok"] is False
+        session.humanise_current(dict(PARAMS))
+        assert session.undo()["ok"] is False   # single render — no previous yet
+
+    def test_undo_swaps_and_redoes(self, session, tmp_path):
+        session.load(_two_bar_beat(tmp_path))
+        r1 = session.humanise_current({**PARAMS, "intensity": 0.35})
+        r2 = session.humanise_current({**PARAMS, "intensity": 0.9})
+        assert r2["can_undo"] is True
+
+        u1 = session.undo()
+        assert u1["ok"] is True
+        assert u1["seed"] == r1["seed"]
+        assert u1["params"]["intensity"] == pytest.approx(0.35)
+        assert [h["ms"] for h in u1["humanised"]["hits"]] == \
+               [h["ms"] for h in r1["humanised"]["hits"]]
+
+        u2 = session.undo()   # undo twice = redo
+        assert u2["seed"] == r2["seed"]
+        assert u2["params"]["intensity"] == pytest.approx(0.9)
+        assert [h["ms"] for h in u2["humanised"]["hits"]] == \
+               [h["ms"] for h in r2["humanised"]["hits"]]
+
+    def test_export_follows_undo(self, session, tmp_path):
+        session.load(_two_bar_beat(tmp_path))
+        session.humanise_current(dict(PARAMS))
+        first_render = session.render_path
+        session.humanise_current({**PARAMS, "intensity": 0.9})
+        session.undo()
+        dest = tmp_path / "undone.mid"
+        assert session.export_to(dest)["ok"] is True
+        assert dest.read_bytes() == first_render.read_bytes()
 
 
 class TestSessionExport:

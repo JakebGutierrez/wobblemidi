@@ -24,7 +24,7 @@ const bridge = (() => {
     autoload: () => call("autoload"),
     openMidi: () => call("open_midi"),
     humanise: (params) => call("humanise", params),
-    reroll: (params) => call("reroll", params),
+    undo: () => call("undo"),
     exportMidi: () => call("export_midi"),
   };
 })();
