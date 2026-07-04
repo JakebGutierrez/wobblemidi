@@ -6,6 +6,7 @@ import bisect
 import dataclasses
 import json
 import math
+import sys
 from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -391,11 +392,49 @@ def humanise(
     push: bool = False,
     phi: float = 0.4,
     all_channels: bool = False,
+    # Continuous lean (GUI round 3). None → derived from the `push` bool
+    # (True→1.0, False→0.0), so all existing callers are unchanged. -1 MIRRORS
+    # the stored per-bucket lean (inverts the source drummers' tendencies) —
+    # it is NOT a synthetic "laid-back drag"; the shipped profile is not
+    # uniformly early (ride leans late), so a=-1 flips each bucket's habit.
+    push_amount: float | None = None,
+    # Per-lane humanisation amount (output gain on that lane's deviation),
+    # ABSOLUTE per group: eff(group) = intensity_by_group.get(group, intensity).
+    # This is NOT independent per-lane timing feel — the kit still shares ONE
+    # drift clock (a 0.0 lane still advances it), and same-tick chords are
+    # governed by the tightest limb (min eff at that tick).
+    intensity_by_group: dict[str, float] | None = None,
 ) -> None:
     if timing_only and velocity_only:
         raise ValueError("timing_only and velocity_only are mutually exclusive")
     if not (0.0 <= phi < 1.0):
         raise ValueError("phi (groove tightness) must be in [0.0, 1.0)")
+    if push_amount is not None:
+        if push:
+            raise ValueError("push and push_amount are mutually exclusive")
+        if not (-1.0 <= push_amount <= 1.0):
+            raise ValueError("push_amount (lean) must be in [-1.0, 1.0]")
+        lean = float(push_amount)
+    else:
+        lean = 1.0 if push else 0.0
+    if intensity_by_group:
+        valid_groups = set(TD11_TO_GROUP.values())
+        unknown = set(intensity_by_group) - valid_groups
+        if unknown:
+            raise ValueError(
+                f"unknown instrument group(s) in intensity_by_group: {sorted(unknown)}"
+            )
+        for g, v in intensity_by_group.items():
+            if v < 0:
+                raise ValueError(f"intensity_by_group[{g!r}] must be >= 0, got {v}")
+    if push_amount is not None and push_amount != 1.0 and not profiles.bucket_offset_means:
+        # Legacy (no-means) profile: there is no stored lean to remove/scale/mirror,
+        # so any lean setting is a silent no-op. Say so once rather than nothing.
+        print(
+            "pocketmidi: note — this profile stores no per-bucket lean means "
+            "(legacy schema); lean/push_amount has no effect.",
+            file=sys.stderr,
+        )
     np.random.seed(seed)
     # Groove-residual RNG, seeded independently of (but reproducibly from) `seed` so it never
     # perturbs the global sample stream — offset/velocity draws stay identical across phi.
@@ -444,6 +483,20 @@ def humanise(
         if g in profiles.velocity_thresholds
     }
 
+    # Per-lane output gain. When intensity_by_group is unset this returns the plain
+    # `intensity` object, so every multiplication below is bit-identical to before.
+    def _eff(group: str) -> float:
+        if intensity_by_group:
+            return intensity_by_group.get(group, intensity)
+        return intensity
+
+    # Per-original-tick MIN eff across all shiftable hits at that tick (kit-wide,
+    # across tracks — the same keying chords use). The tightest limb governs a
+    # chord's landing: a kick at eff 0.15 under a hat at 0.8 keeps the accent
+    # anchored near the grid instead of being dragged out by the looser lane.
+    # Filled during pass 1 below; only populated when intensity_by_group is set.
+    tick_min_eff: dict[int, float] = {}
+
     def _new_velocity(group: str, bucket: BucketProfile, vel_delta_raw: float,
                       velocity: int) -> int:
         # B1: the sampled delta perturbs the user's own dynamics (shape unchanged).
@@ -456,7 +509,7 @@ def humanise(
             vel_delta = fluct_v + mu_v
         else:
             vel_delta = vel_delta_raw
-        return max(1, min(127, round(velocity + vel_delta * intensity)))
+        return max(1, min(127, round(velocity + vel_delta * _eff(group))))
 
     # ---- Pass 1 (per track): absolute ticks, will_shift, windowing bounds ----
     tracks_abs: list[list[tuple[int, mido.Message]]] = []
@@ -494,6 +547,10 @@ def humanise(
                         thresholds=file_thresholds.get(TD11_TO_GROUP[msg.note]),
                     )[0] is not None  # only first element needed here
                 )
+            if shiftable and intensity_by_group:
+                e = _eff(TD11_TO_GROUP[msg.note])
+                cur = tick_min_eff.get(abs_t)
+                tick_min_eff[abs_t] = e if cur is None else min(cur, e)
             will_shift.append(shiftable)
 
         # next_fixed[i]: abs_tick of first event at j >= i where will_shift[j] is False
@@ -573,12 +630,15 @@ def humanise(
                 continue
 
             mu_debias = profiles.bucket_offset_means.get(key_used, 0.0)
+            eff_own = _eff(group)
             is_chord_anchor = False
             if phi == 0.0:
                 # Exact pre-drift behaviour: drift and coupling both inert.
-                offset_ms = offset_ms_raw - (0.0 if push else mu_debias)
+                # lean generalises the old push bool: (1-lean)*mu is bit-equal to
+                # the old `0.0 if push else mu_debias` at lean ∈ {1.0, 0.0}.
+                offset_ms = offset_ms_raw - (1.0 - lean) * mu_debias
                 candidate = grid_tick + _ms_offset_to_ticks(
-                    grid_tick, offset_ms * intensity, tempo_map, ppq
+                    grid_tick, offset_ms * eff_own, tempo_map, ppq
                 )
             elif abs_t == chord_tick:
                 # Coupled member (same original tick as the anchor solo hit, on ANY track):
@@ -590,18 +650,27 @@ def humanise(
                 c = offset_ms_raw - float(bucket.offsets.mean())
                 residual_ms = max(-COUPLED_RESIDUAL_MS,
                                   min(COUPLED_RESIDUAL_MS, COUPLED_RESIDUAL_FRAC * c))
+                # Member residual scales by its OWN eff (a 0.0 lane sits exactly on
+                # the anchor's landing); the anchor itself was already governed by
+                # the tick's min eff, so the chord stays tight at any mix of gains.
                 candidate = chord_anchor_abs + _ms_offset_to_ticks(
-                    chord_anchor_abs, residual_ms * intensity, tempo_map, ppq
+                    chord_anchor_abs, residual_ms * eff_own, tempo_map, ppq
                 )
             else:
                 # Solo hit / chord anchor: centre on the bucket's own mean (so a legacy/meanless
                 # profile's lean is never amplified), advance the clock + independent residual,
                 # then re-apply the systematic lean per the push contract.
                 mu_center = float(bucket.offsets.mean())
+                # The clock steps on the UNSCALED centred sample: the kit shares one
+                # drift trajectory regardless of per-lane gains (a 0.0 lane still
+                # drives it). Per-lane eff scales only this hit's OUTPUT deviation,
+                # and an anchor is governed by the tick's min eff (tightest limb).
                 fluct = groove.step(offset_ms_raw - mu_center, float(bucket.offsets.std()))
-                offset_ms = fluct + (mu_center - (0.0 if push else mu_debias))
+                offset_ms = fluct + (mu_center - (1.0 - lean) * mu_debias)
+                anchor_eff = (tick_min_eff.get(abs_t, eff_own)
+                              if intensity_by_group else intensity)
                 candidate = grid_tick + _ms_offset_to_ticks(
-                    grid_tick, offset_ms * intensity, tempo_map, ppq
+                    grid_tick, offset_ms * anchor_eff, tempo_map, ppq
                 )
                 chord_tick = abs_t
                 is_chord_anchor = True

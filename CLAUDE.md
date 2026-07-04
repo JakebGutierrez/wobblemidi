@@ -502,3 +502,39 @@ Key decisions:
   engine-vs-human comparison and must not silently move with the product default.
 - Ten mechanics tests pin `intensity=1.0` explicitly (they test engine behaviour, not
   the default); `test_defaults` locks 0.35.
+
+## Implementation notes — lean + per-group intensity (GUI round 3, engine params)
+
+Two `humanise()` params added for the GUI (2026-07-04). Both are per-hit arithmetic
+applied AFTER `_sample_bucket()` — RNG streams and every module-12/13 contract hold by
+construction; byte-equality at the defaults is test-locked (`TestLeanAndPerGroupIntensity`).
+
+**`push_amount: float | None = None` (lean).** Generalises the `push` bool:
+`offset - (0.0 if push else mu)` became `offset - (1.0 - lean) * mu` at both de-bias
+sites (phi==0 bypass + solo path), `lean = push_amount if not None else (1.0 if push
+else 0.0)`. Mutually exclusive with `push=True` (raises); range [-1, 1] validated.
+HONEST SCOPE: -1 MIRRORS the stored per-bucket means — it inverts the source drummers'
+tendencies, it is NOT a synthetic "laid-back drag" (the shipped profile is not uniformly
+early; ride leans late). UI labels the negative side accordingly. Known interaction: the
+de-bias precedes the intensity multiply, so injected lean scales with the group's eff —
+"tight but pushing" is not expressible. Legacy (no-means) profiles: any lean is a no-op;
+an explicit `push_amount != 1.0` prints a one-line stderr note (test-locked no-op).
+
+**`intensity_by_group: dict[str, float] | None = None`.** ABSOLUTE per-lane
+humanisation amount (output gain on that lane's deviation):
+`eff(group) = dict.get(group, intensity)`. Keys validated against `TD11_TO_GROUP`
+values (unknown → ValueError, not silent); values must be >= 0. HONEST SCOPE — this is
+NOT independent per-lane timing feel:
+- The kit still shares ONE drift clock: `groove.step` consumes the UNSCALED centred
+  sample, so a 0.0 lane still drives the shared drift (test-locked: kick output is
+  identical whether hats are at 0.9/0.1/unset on a collision-free pattern).
+- Same-tick chords are governed by the TIGHTEST limb: the anchor's candidate is scaled
+  by the per-tick MIN eff across all shiftable hits at that original tick
+  (`tick_min_eff`, precomputed in pass 1, order-independent — locked in both stream
+  orders); coupled members scale their ±1 ms residual by their OWN eff, so a 0.0 member
+  sits exactly on the anchor's landing.
+- `_new_velocity` uses `eff(group)`; eff=0 → velocities untouched.
+GUI exposes this as lane-select (INTENSITY knob scoped to a clicked lane); TIGHTNESS and
+LEAN stay kit-wide in the UI to match the engine truth. A per-lane fader bank (808
+style) is the noted future UI if per-drum use expands. CLI flags for both params:
+deferred.

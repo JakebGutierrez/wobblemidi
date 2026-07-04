@@ -2138,3 +2138,278 @@ class TestRelativeTieringIntegration:
         got = [m.velocity for m in mido.MidiFile(str(out)).tracks[0]
                if m.type == "note_on" and m.velocity > 0]
         assert got == [80] * 16   # all soft: 100 - 20
+
+
+# ---------------------------------------------------------------------------
+# TestLeanAndPerGroupIntensity — GUI round 3 engine params
+# push_amount (continuous lean, mirror-not-drag) and intensity_by_group
+# (per-lane output gain on ONE shared clock, min-eff chord governance).
+# Invariants and equivalences, not constant locks. Profiles carry NONZERO
+# stored means — a zero-mean profile passes the lean matrix vacuously.
+# ---------------------------------------------------------------------------
+
+class TestLeanAndPerGroupIntensity:
+    PPQ = 480
+    TEMPO_US = 500_000               # 120 BPM → 1 tick ≈ 1.0417 ms
+    MS_PER_TICK = 500_000 / 480 / 1000.0
+
+    # -- builders -----------------------------------------------------------
+
+    def _prof(self, kick_m=50.0, hat_m=-30.0, spread=True, means=True) -> LoadedProfile:
+        def bucket(m):
+            if spread:
+                offs = np.array([-20.0, -10.0, 0.0, 10.0, 20.0]) + m
+                vds = np.array([-6.0, -3.0, 0.0, 3.0, 6.0])
+            else:
+                offs = np.array([m, m, m])
+                vds = np.zeros(3)
+            return BucketProfile(offsets=offs, vel_deltas=vds, kde=None)
+        buckets = {
+            "rock|beat|kick": bucket(kick_m),
+            "rock|beat|hihat_closed": bucket(hat_m),
+        }
+        means_d = ({k: float(np.mean(b.offsets)) for k, b in buckets.items()}
+                   if means else {})
+        return LoadedProfile(buckets=buckets, velocity_thresholds={},
+                             bucket_offset_means=means_d)
+
+    def _two_lane_midi(self, tmp_path, same_tick=True, n=12, hat_first=False,
+                       name="two_lane.mid") -> Path:
+        """Type 1: kick track + hat track. same_tick=True notates chords."""
+        mid = mido.MidiFile(type=1, ticks_per_beat=self.PPQ)
+        cond = mido.MidiTrack(); mid.tracks.append(cond)
+        cond.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        cond.append(mido.MetaMessage("end_of_track", time=0))
+        hat_shift = 0 if same_tick else self.PPQ // 2
+        specs = [(42, 60, hat_shift), (36, 100, 0)] if hat_first else \
+                [(36, 100, 0), (42, 60, hat_shift)]
+        for note, vel, shift in specs:
+            tr = mido.MidiTrack(); mid.tracks.append(tr)
+            prev = 0
+            for i in range(n):
+                t = 4 * self.PPQ + i * self.PPQ + shift
+                tr.append(mido.Message("note_on", channel=9, note=note,
+                                       velocity=vel, time=t - prev))
+                tr.append(mido.Message("note_off", channel=9, note=note,
+                                       velocity=0, time=200))
+                prev = t + 200
+            tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / name
+        mid.save(str(p))
+        return p
+
+    def _kick_line(self, tmp_path, n=8) -> Path:
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        prev = 0
+        for i in range(n):
+            t = 4 * self.PPQ * (i + 1)
+            tr.append(mido.Message("note_on", channel=9, note=36, velocity=100,
+                                   time=t - prev))
+            tr.append(mido.Message("note_off", channel=9, note=36, velocity=0,
+                                   time=200))
+            prev = t + 200
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / "kicks.mid"
+        mid.save(str(p))
+        return p
+
+    def _note_events(self, path, note):
+        """Sorted [(abs_tick, velocity), ...] of note_ons for `note`."""
+        out = []
+        for tr in mido.MidiFile(str(path)).tracks:
+            t = 0
+            for msg in tr:
+                t += msg.time
+                if msg.type == "note_on" and msg.velocity > 0 and msg.note == note:
+                    out.append((t, msg.velocity))
+        return sorted(out)
+
+    # -- byte-equality matrices ----------------------------------------------
+
+    def test_push_amount_equivalence_matrix(self, tmp_path):
+        """{None/0.0 ≡ old default, 1.0 ≡ old push=True} × {phi=0, phi>0}, multi-track."""
+        prof = self._prof()
+        inp = self._two_lane_midi(tmp_path, same_tick=True)
+        cases = [
+            (dict(push=False), dict(push_amount=0.0)),
+            (dict(push=True), dict(push_amount=1.0)),
+            (dict(push=False), dict()),          # None default ≡ old default
+        ]
+        for phi in (0.0, 0.5):
+            for old_kw, new_kw in cases:
+                a = tmp_path / "a.mid"
+                b = tmp_path / "b.mid"
+                humanise(inp, a, prof, intensity=1.0, seed=42, phi=phi, **old_kw)
+                humanise(inp, b, prof, intensity=1.0, seed=42, phi=phi, **new_kw)
+                assert a.read_bytes() == b.read_bytes(), (phi, old_kw, new_kw)
+
+    def test_intensity_by_group_none_empty_identical(self, tmp_path):
+        prof = self._prof()
+        inp = self._two_lane_midi(tmp_path, same_tick=True)
+        for phi in (0.0, 0.5):
+            outs = []
+            for i, kw in enumerate([dict(), dict(intensity_by_group=None),
+                                    dict(intensity_by_group={})]):
+                o = tmp_path / f"o{i}.mid"
+                humanise(inp, o, prof, intensity=1.0, seed=7, phi=phi, **kw)
+                outs.append(o.read_bytes())
+            assert outs[0] == outs[1] == outs[2]
+
+    # -- lean semantics --------------------------------------------------------
+
+    def test_lean_mirror_and_linearity(self, tmp_path):
+        """Mean landing at a=-1 reflects a=+1 about the a=0 mean; a=0.5 is linear.
+
+        ms-level with tolerance (tick rounding), not per-hit byte equality.
+        Constant-offset bucket (m=+50, stored mean 50) → deterministic even at
+        phi>0 (centred sample and residual sigma are both zero).
+        """
+        prof = self._prof(kick_m=50.0, spread=False)
+        inp = self._kick_line(tmp_path)
+        grid = [4 * self.PPQ * (i + 1) for i in range(8)]
+
+        def mean_delta_ms(amount):
+            out = tmp_path / f"lean_{amount}.mid"
+            humanise(inp, out, prof, intensity=1.0, seed=5, phi=0.4,
+                     push_amount=amount)
+            ticks = [t for t, _v in self._note_events(out, 36)]
+            deltas = [(t - g) * self.MS_PER_TICK for t, g in zip(ticks, grid)]
+            return float(np.mean(deltas))
+
+        d_pos = mean_delta_ms(1.0)
+        d_neg = mean_delta_ms(-1.0)
+        d_zero = mean_delta_ms(0.0)
+        d_half = mean_delta_ms(0.5)
+        tol = 2.0 * self.MS_PER_TICK
+        assert d_pos == pytest.approx(50.0, abs=tol)
+        assert d_zero == pytest.approx(0.0, abs=tol)
+        # reflection about the a=0 mean
+        assert d_neg - d_zero == pytest.approx(-(d_pos - d_zero), abs=tol)
+        # linearity spot check
+        assert d_half == pytest.approx(d_zero + 0.5 * (d_pos - d_zero), abs=tol)
+
+    def test_legacy_profile_lean_noop(self, tmp_path, capsys):
+        """No stored means → any lean is a byte-identical no-op, with a stderr note."""
+        prof = self._prof(means=False)
+        inp = self._two_lane_midi(tmp_path, same_tick=False)
+        outs = {}
+        for amount in (None, 1.0, 0.5, -1.0):
+            o = tmp_path / f"legacy_{amount}.mid"
+            kw = {} if amount is None else {"push_amount": amount}
+            capsys.readouterr()
+            humanise(inp, o, prof, intensity=1.0, seed=9, phi=0.5, **kw)
+            err = capsys.readouterr().err
+            if amount in (0.5, -1.0):
+                assert "no per-bucket lean means" in err
+            else:
+                assert "no per-bucket lean means" not in err
+            outs[amount] = o.read_bytes()
+        assert len(set(outs.values())) == 1
+
+    # -- per-group intensity semantics ---------------------------------------------
+
+    def test_chord_min_eff_governs_both_orders(self, tmp_path):
+        """Same-tick kick+hat with {kick: 0.15, hats: 0.8}: the pair lands together
+        AND at the min-eff (0.15) displacement — the tightest limb is the
+        timekeeper. Locked in BOTH track/stream orders (constant-offset profile
+        makes landings order-independent)."""
+        prof = self._prof(kick_m=50.0, hat_m=50.0, spread=False)
+        scales = {"kick": 0.15, "hihat_closed": 0.8}
+        expected_ticks = round((50.0 * 0.15) / self.MS_PER_TICK)   # ≈ 7
+        wrong_ticks = round((50.0 * 0.8) / self.MS_PER_TICK)       # ≈ 38
+        for hat_first in (False, True):
+            inp = self._two_lane_midi(tmp_path, same_tick=True, hat_first=hat_first,
+                                      name=f"chord_{hat_first}.mid")
+            out = tmp_path / f"chord_out_{hat_first}.mid"
+            humanise(inp, out, prof, intensity=1.0, seed=3, phi=0.5,
+                     push_amount=1.0, intensity_by_group=scales)
+            kicks = [t for t, _ in self._note_events(out, 36)]
+            hats = [t for t, _ in self._note_events(out, 42)]
+            grid = [4 * self.PPQ + i * self.PPQ for i in range(12)]
+            gaps = [abs(k - h) for k, h in zip(kicks, hats)]
+            assert max(gaps) <= 2, f"chord flam (hat_first={hat_first}): {gaps}"
+            disp = [k - g for k, g in zip(kicks, grid)]
+            for d in disp:
+                assert abs(d - expected_ticks) <= 2, (
+                    f"anchor not governed by min eff: displacement {d} ticks, "
+                    f"expected ~{expected_ticks} (0.8-eff would be ~{wrong_ticks})")
+
+    def test_changing_lane_eff_leaves_other_lanes_identical(self, tmp_path):
+        """Cross-lane isolation where legitimate — and the honest shared-clock
+        behaviour: hats keep driving the kit clock at ANY eff (even 0), so kick
+        output is identical whether hats are at 0.9, 0.1, or unset."""
+        prof = self._prof()
+        inp = self._two_lane_midi(tmp_path, same_tick=False)   # collision-free
+        kick_results = []
+        hat_results = []
+        for i, scales in enumerate([{"hihat_closed": 0.9}, {"hihat_closed": 0.1}, None]):
+            o = tmp_path / f"iso{i}.mid"
+            humanise(inp, o, prof, intensity=1.0, seed=13, phi=0.5,
+                     intensity_by_group=scales)
+            kick_results.append(self._note_events(o, 36))
+            hat_results.append(self._note_events(o, 42))
+        assert kick_results[0] == kick_results[1] == kick_results[2]
+        assert hat_results[0] != hat_results[1]
+
+    def test_eff_zero_lane_on_grid(self, tmp_path):
+        """A 0.0 lane: solo hits land exactly on their notated ticks with input
+        velocities; other lanes are untouched vs the no-dict run."""
+        prof = self._prof()
+        inp = self._two_lane_midi(tmp_path, same_tick=False)
+        out0 = tmp_path / "z0.mid"
+        outn = tmp_path / "zn.mid"
+        humanise(inp, out0, prof, intensity=1.0, seed=21, phi=0.5,
+                 intensity_by_group={"hihat_closed": 0.0})
+        humanise(inp, outn, prof, intensity=1.0, seed=21, phi=0.5)
+        hat_in = self._note_events(inp, 42)
+        assert self._note_events(out0, 42) == hat_in
+        assert self._note_events(out0, 36) == self._note_events(outn, 36)
+
+    # -- mode interactions ------------------------------------------------------------
+
+    def test_velocity_only_with_group_dict(self, tmp_path):
+        prof = self._prof()
+        inp = self._two_lane_midi(tmp_path, same_tick=False)
+        out = tmp_path / "vo.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=17, phi=0.5,
+                 velocity_only=True, intensity_by_group={"kick": 0.0})
+        kick_in = self._note_events(inp, 36)
+        hat_in = self._note_events(inp, 42)
+        kick_out = self._note_events(out, 36)
+        hat_out = self._note_events(out, 42)
+        # positions untouched everywhere (velocity_only contract)
+        assert [t for t, _ in kick_out] == [t for t, _ in kick_in]
+        assert [t for t, _ in hat_out] == [t for t, _ in hat_in]
+        # kick velocities frozen by eff 0; hat velocities humanised
+        assert [v for _, v in kick_out] == [v for _, v in kick_in]
+        assert [v for _, v in hat_out] != [v for _, v in hat_in]
+
+    def test_timing_only_with_push_amount(self, tmp_path):
+        prof = self._prof(kick_m=50.0, spread=False)
+        inp = self._kick_line(tmp_path)
+        out = tmp_path / "to.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=19, phi=0.4,
+                 timing_only=True, push_amount=1.0)
+        evs = self._note_events(out, 36)
+        assert [v for _, v in evs] == [100] * len(evs)          # velocities untouched
+        grid = [4 * self.PPQ * (i + 1) for i in range(8)]
+        assert [t for t, _ in evs] != grid                       # timing shifted
+
+    # -- validation ----------------------------------------------------------------------
+
+    def test_validation_errors(self, tmp_path):
+        prof = self._prof()
+        inp = self._kick_line(tmp_path)
+        out = tmp_path / "v.mid"
+        with pytest.raises(ValueError, match="unknown instrument group"):
+            humanise(inp, out, prof, intensity_by_group={"cowbell": 1.0})
+        with pytest.raises(ValueError, match="must be >= 0"):
+            humanise(inp, out, prof, intensity_by_group={"kick": -0.1})
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            humanise(inp, out, prof, push=True, push_amount=0.5)
+        with pytest.raises(ValueError, match="must be in"):
+            humanise(inp, out, prof, push_amount=1.5)
+        with pytest.raises(ValueError, match="must be in"):
+            humanise(inp, out, prof, push_amount=-1.5)
