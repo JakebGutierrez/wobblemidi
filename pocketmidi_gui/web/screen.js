@@ -10,25 +10,31 @@ const grooveScreen = (() => {
     tom_high: "TOM HI", tom_mid: "TOM MD", tom_low: "TOM LO",
     snare: "SNARE", kick: "KICK",
   };
-  const LANE_COLORS = {
+  // Two palettes, matched to the version chips: warm amber = humanised, steel
+  // blue = original. Whichever version is AUDIBLE draws solid in its palette;
+  // the other renders as its dim ghost. A neutral whisker spans each pair.
+  const PALETTE_WARM = {
     crash: "#f6ecc8", ride: "#f2e2a0", hihat_open: "#f0d075", hihat_closed: "#e8b73c",
     tom_high: "#f2c96c", tom_mid: "#f0b95c", tom_low: "#eda94e",
     snare: "#f07d33", kick: "#e8503a",
+  };
+  const PALETTE_COOL = {
+    crash: "#dceef8", ride: "#c2e0f2", hihat_open: "#a9d4ee", hihat_closed: "#7fbde6",
+    tom_high: "#6fb0e0", tom_mid: "#60a2d6", tom_low: "#5595cc",
+    snare: "#4c88c4", kick: "#4a7fd0",
   };
   const RULER_H = 22;
   const GUTTER_W = 78;
   const TAIL_MS = 500;         // breathing room after the last hit
   const MIN_SPAN = 250;        // ms — max zoom in
-  // Overlay encoding: originals render as cool-grey filled ghosts (clearly "the
-  // before" against the warm lane colours), humanised marks sit on top, and a
-  // bright whisker spans ghost→landing so the shift reads even when small.
-  const GHOST_FILL = "rgba(128, 148, 164, 0.45)";
-  const GHOST_EDGE = "rgba(165, 186, 200, 0.8)";
-  const WHISKER = "rgba(255, 244, 214, 0.85)";
+  const GHOST_FILL_ALPHA = 0.22;
+  const GHOST_EDGE_ALPHA = 0.5;
+  const WHISKER = "rgba(255, 244, 214, 0.8)";
 
   let canvas, ctx, mmCanvas, mmCtx;
   let original = null;
   let humanised = null;
+  let audible = "humanised";   // which version is solid/foreground
   let viewStart = 0;           // ms at left edge of the zoom window
   let viewSpan = 8000;         // ms across the zoom window
   let playheadMs = null;
@@ -114,26 +120,13 @@ const grooveScreen = (() => {
     ctx.fillStyle = "rgba(255,182,72,0.25)";
     ctx.fillRect(GUTTER_W, RULER_H - 1, w - GUTTER_W, 1);
 
-    // overlay legend (only when a humanised render is on screen)
-    if (humanised) {
-      ctx.font = "8.5px 'Futura', 'Avenir Next', sans-serif";
-      let lx = w - 172;
-      ctx.fillStyle = GHOST_FILL;
-      ctx.fillRect(lx, 6, 8, 9);
-      ctx.strokeStyle = GHOST_EDGE;
-      ctx.strokeRect(lx + 0.5, 6.5, 7, 8);
-      ctx.fillStyle = "rgba(200,215,225,0.75)";
-      ctx.fillText("ORIG", lx + 12, 14);
-      lx += 48;
-      ctx.fillStyle = "#e8b73c";
-      ctx.fillRect(lx, 6, 8, 9);
-      ctx.fillStyle = "rgba(255,182,72,0.8)";
-      ctx.fillText("HUMANISED", lx + 12, 14);
-    }
-
-    // hits — with a humanised render, originals become ghosts underneath
-    if (humanised) drawHits(original.hits, laneIdx, laneY, laneH, w, true);
-    drawHits(d.hits, laneIdx, laneY, laneH, w, false);
+    // hits — the audible version draws solid in its palette, the other is its
+    // dim ghost; whiskers connect each original→humanised pair
+    const fg = fgVersion();
+    const bgV = humanised ? (fg === humanised ? original : humanised) : null;
+    if (bgV) drawHits(bgV.hits, laneIdx, laneY, laneH, w, paletteOf(bgV), true);
+    if (humanised) drawWhiskers(humanised.hits, laneIdx, laneY, w);
+    drawHits(fg.hits, laneIdx, laneY, laneH, w, paletteOf(fg), false);
 
     // gutter: lane labels over a solid strip (drawn last so hits never overlap it)
     ctx.fillStyle = "#0b0e0c";
@@ -141,8 +134,9 @@ const grooveScreen = (() => {
     ctx.fillStyle = "rgba(255,182,72,0.12)";
     ctx.fillRect(GUTTER_W - 1, 0, 1, h);
     ctx.font = "10px 'Futura', 'Avenir Next', sans-serif";
+    const labelPal = paletteOf(fg);
     lanes.forEach((l, i) => {
-      ctx.fillStyle = LANE_COLORS[l] || "#e8b73c";
+      ctx.fillStyle = labelPal[l] || "#e8b73c";
       ctx.globalAlpha = 0.85;
       ctx.fillText(LANE_LABELS[l] || l.toUpperCase(), 10, laneY(i) + laneH / 2 + 3.5);
       ctx.globalAlpha = 1;
@@ -177,8 +171,22 @@ const grooveScreen = (() => {
     }
   }
 
-  function drawHits(hits, laneIdx, laneY, laneH, w, asGhost) {
-    const markW = Math.max(2.5, Math.min(6, (w - GUTTER_W) / (viewSpan / 60)));
+  function fgVersion() {
+    if (!humanised) return original;
+    return audible === "original" ? original : humanised;
+  }
+
+  function paletteOf(version) {
+    if (!humanised) return PALETTE_WARM;           // nothing to contrast yet
+    return version === humanised ? PALETTE_WARM : PALETTE_COOL;
+  }
+
+  function markWidth(w) {
+    return Math.max(2.5, Math.min(6, (w - GUTTER_W) / (viewSpan / 60)));
+  }
+
+  function drawHits(hits, laneIdx, laneY, laneH, w, palette, asGhost) {
+    const markW = markWidth(w);
     for (const hit of hits) {
       if (hit.ms < viewStart - 50 || hit.ms > viewStart + viewSpan + 50) continue;
       const i = laneIdx[hit.lane];
@@ -187,28 +195,37 @@ const grooveScreen = (() => {
       const v = hit.velocity / 127;
       const hh = laneH * (0.22 + 0.66 * v);
       const y = laneY(i) + laneH - hh - 1;
-      const color = LANE_COLORS[hit.lane] || "#e8b73c";
+      const color = palette[hit.lane] || "#e8b73c";
       if (asGhost) {
-        ctx.fillStyle = GHOST_FILL;
+        ctx.globalAlpha = GHOST_FILL_ALPHA;
+        ctx.fillStyle = color;
         ctx.fillRect(x - markW / 2, y, markW, hh);
-        ctx.strokeStyle = GHOST_EDGE;
+        ctx.globalAlpha = GHOST_EDGE_ALPHA;
+        ctx.strokeStyle = color;
         ctx.lineWidth = 1;
         ctx.strokeRect(x - markW / 2 + 0.5, y + 0.5, markW - 1, hh - 1);
+        ctx.globalAlpha = 1;
       } else {
-        // displacement whisker: original position → landing position
-        if (hit.orig_ms !== undefined) {
-          const gx = xOf(hit.orig_ms, w);
-          if (Math.abs(gx - x) > 1.25) {
-            ctx.fillStyle = WHISKER;
-            ctx.fillRect(Math.min(gx, x), laneY(i) + 2.5, Math.abs(gx - x), 1.4);
-            ctx.fillRect(gx - 0.7, laneY(i) + 1, 1.4, 4.5);   // foot at the origin
-          }
-        }
         ctx.globalAlpha = 0.7 + 0.3 * v;
         ctx.fillStyle = color;
         ctx.fillRect(x - markW / 2, y, markW, hh);
         ctx.globalAlpha = 1;
       }
+    }
+  }
+
+  function drawWhiskers(hits, laneIdx, laneY, w) {
+    for (const hit of hits) {
+      if (hit.orig_ms === undefined) continue;
+      if (hit.ms < viewStart - 50 || hit.ms > viewStart + viewSpan + 50) continue;
+      const i = laneIdx[hit.lane];
+      if (i === undefined) continue;
+      const x = xOf(hit.ms, w);
+      const gx = xOf(hit.orig_ms, w);
+      if (Math.abs(gx - x) <= 1.25) continue;
+      ctx.fillStyle = WHISKER;
+      ctx.fillRect(Math.min(gx, x), laneY(i) + 2.5, Math.abs(gx - x), 1.4);
+      ctx.fillRect(gx - 0.7, laneY(i) + 1, 1.4, 4.5);   // foot at the origin
     }
   }
 
@@ -222,17 +239,18 @@ const grooveScreen = (() => {
     mmCtx.fillRect(0, 0, w, h);
     if (!original) return;
 
-    const d = data();
+    const fg = fgVersion();
+    const palette = paletteOf(fg);
     const dur = durationMs();
-    const laneN = d.lanes.length;
+    const laneN = fg.lanes.length;
     const laneIdx = {};
-    d.lanes.forEach((l, i) => { laneIdx[l] = i; });
+    fg.lanes.forEach((l, i) => { laneIdx[l] = i; });
 
-    for (const hit of d.hits) {
+    for (const hit of fg.hits) {
       const x = (hit.ms / dur) * w;
       const y = 2 + (laneIdx[hit.lane] / laneN) * (h - 5);
       mmCtx.globalAlpha = 0.35 + 0.5 * (hit.velocity / 127);
-      mmCtx.fillStyle = LANE_COLORS[hit.lane] || "#e8b73c";
+      mmCtx.fillStyle = palette[hit.lane] || "#e8b73c";
       mmCtx.fillRect(x, y, 1.5, Math.max(1.5, (h - 5) / laneN - 1));
     }
     mmCtx.globalAlpha = 1;
@@ -308,11 +326,7 @@ const grooveScreen = (() => {
       redraw();
     }, { passive: false });
 
-    canvas.addEventListener("dblclick", () => {
-      viewStart = 0;
-      viewSpan = durationMs();
-      redraw();
-    });
+    canvas.addEventListener("dblclick", fit);
 
     let mmDragging = false;
     const mmJump = (e) => {
@@ -363,12 +377,31 @@ const grooveScreen = (() => {
 
   function setView(startMs, spanMs) {
     viewStart = startMs;
-    viewSpan = spanMs;
+    if (spanMs !== undefined) viewSpan = spanMs;   // omitted = keep current zoom
     redraw();
   }
 
   function setStartMarker(ms) {
     startMarkerMs = ms;
+    redraw();
+  }
+
+  function setAudible(version) {
+    audible = version;
+    redraw();
+  }
+
+  function zoomBy(factor) {
+    const centre = viewStart + viewSpan / 2;
+    viewSpan *= factor;
+    clampView();
+    viewStart = centre - viewSpan / 2;
+    redraw();
+  }
+
+  function fit() {
+    viewStart = 0;
+    viewSpan = durationMs();
     redraw();
   }
 
@@ -382,7 +415,8 @@ const grooveScreen = (() => {
   }
 
   return {
-    init, setData, setPlayhead, setView, setStartMarker, redraw,
+    init, setData, setPlayhead, setView, setStartMarker, setAudible,
+    zoomBy, fit, redraw,
     onPick: (fn) => { onPickCb = fn; },
   };
 })();

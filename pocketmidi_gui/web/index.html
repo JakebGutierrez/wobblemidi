@@ -18,9 +18,10 @@
         <span class="tagline">RHYTHM HUMANISER</span>
         <span class="subline">REAL DRUMMER DATA &middot; FULLY OFFLINE</span>
       </div>
-      <div class="led-block">
+      <button id="btn-help" title="What do all these controls do?">?</button>
+      <div class="led-block" title="Lights when the humanisation engine and drummer profile are loaded">
         <div id="power-led" class="led"></div>
-        <span class="led-label">POWER</span>
+        <span class="led-label">ENGINE</span>
       </div>
     </div>
   </header>
@@ -29,27 +30,43 @@
     <div id="screen-wrap">
       <canvas id="groove-screen"></canvas>
       <div id="screen-empty" class="screen-overlay visible">NO PATTERN LOADED &mdash; PRESS LOAD</div>
-      <div id="hearing-chip">&#9679; HUMANISED</div>
     </div>
-    <div id="minimap-wrap">
+    <div id="transport">
+      <button class="tbtn" id="btn-tostart" title="Back to the top (Home)">&#9198;</button>
+      <span id="readout">BAR &ndash; / &ndash; &middot; 0:00.0</span>
+      <span class="t-space"></span>
+      <div id="version-chips">
+        <button class="vchip vchip-orig" id="vchip-orig" disabled
+                title="Hear the un-humanised original (A)">ORIG</button>
+        <button class="vchip vchip-hum active" id="vchip-hum" disabled
+                title="Hear the humanised version (A)">HUMANISED</button>
+      </div>
+      <span class="t-sep"></span>
+      <button class="tbtn" id="btn-zoomout" title="Zoom out">&minus;</button>
+      <button class="tbtn" id="btn-zoomin" title="Zoom in">+</button>
+      <button class="tbtn tbtn-wide" id="btn-fit" title="Fit the whole song (double-click the screen does this too)">FIT</button>
+    </div>
+    <div id="minimap-wrap" title="Whole song — click or drag to move the view">
       <canvas id="minimap"></canvas>
     </div>
-    <div id="screen-hints">DRAG PAN &middot; &#8984;WHEEL ZOOM &middot; DBLCLICK FIT</div>
   </section>
 
   <section id="controls">
     <div id="knobs">
-      <div class="knob-mount big" id="knob-intensity">
+      <div class="knob-mount big" id="knob-intensity"
+           title="How much humanisation is applied. 0.2–0.5 is the sweet spot; 1.0 is raw drummer spread (loose). Drag up/down · shift = fine · double-click = reset">
         <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
         <span class="ctl-label">INTENSITY</span>
         <span class="ctl-value">0.35</span>
       </div>
-      <div class="knob-mount" id="knob-tightness">
+      <div class="knob-mount" id="knob-tightness"
+           title="How much the kit moves as one pocket. Low = every hit drifts independently (twitchy); high = the whole kit breathes together. Drag up/down · shift = fine · double-click = reset">
         <div class="knob"><div class="knob-cap"></div><div class="knob-rotor"><div class="knob-pointer"></div></div></div>
         <span class="ctl-label">TIGHTNESS</span>
         <span class="ctl-value">0.40</span>
       </div>
-      <div class="toggle-mount" id="toggle-push">
+      <div class="toggle-mount" id="toggle-push"
+           title="Include the source drummers' habit of leaning ahead of / behind the beat. Off = human looseness centred on the grid">
         <div class="toggle"><div class="toggle-lever"></div></div>
         <span class="ctl-label">PUSH</span>
         <span class="ctl-value">OFF</span>
@@ -61,16 +78,35 @@
     </div>
     <div id="buttons">
       <button id="btn-load"     class="pad pad-red">LOAD</button>
-      <button id="btn-humanise" class="pad pad-orange" disabled>HUMANISE</button>
-      <button id="btn-newtake"  class="pad pad-orange pad-small" disabled
-              title="Same settings, new dice — a different take">NEW<br>TAKE</button>
-      <button id="btn-play"     class="pad pad-yellow" disabled>PLAY</button>
-      <button id="btn-ab"       class="pad pad-cream" disabled>A/B</button>
-      <button id="btn-export"   class="pad pad-cream" disabled>EXPORT</button>
+      <button id="btn-humanise" class="pad-hero" disabled
+              title="Apply real-drummer timing and velocity to the loaded MIDI">
+        <span>HUMANISE</span>
+      </button>
+      <button id="btn-reroll"   class="pad pad-orange pad-small" disabled
+              title="New take: keep your settings, roll different random variation">&#9860;<br>REROLL</button>
+      <button id="btn-play"     class="pad pad-yellow" disabled title="Play / stop (space). Click the screen to set where playback starts">PLAY</button>
+      <button id="btn-ab"       class="pad pad-cream" disabled title="Flip between original and humanised while playing (A)">A/B</button>
+      <button id="btn-export"   class="pad pad-cream" disabled title="Save the humanised MIDI">EXPORT</button>
     </div>
   </section>
 
   <div id="toast"></div>
+
+  <div id="help-overlay">
+    <div id="help-card">
+      <div class="help-title">CONTROLS <button id="btn-help-close">&times;</button></div>
+      <dl>
+        <dt>INTENSITY</dt><dd>How much humanisation. 0.2&ndash;0.5 is the sweet spot; 1.0 is raw drummer spread.</dd>
+        <dt>TIGHTNESS</dt><dd>How much the kit moves as one pocket vs every hit drifting on its own.</dd>
+        <dt>PUSH</dt><dd>Keep the source drummers' lean ahead of / behind the beat. Off = centred on the grid.</dd>
+        <dt>ALL CH</dt><dd>Humanise drum notes on every MIDI channel, not just channel 10.</dd>
+        <dt>HUMANISE</dt><dd>Apply the groove. <b>&#9860; REROLL</b> keeps your settings, rolls a different take.</dd>
+        <dt>ORIG / HUMANISED</dt><dd>What you're hearing &mdash; blue is the original, amber is humanised. Click (or press A) to flip, even mid-playback.</dd>
+        <dt>ENGINE</dt><dd>Lit when the drummer profile is loaded and ready.</dd>
+        <dt>SCREEN</dt><dd>Click = set play position &middot; drag = pan &middot; &#8984;wheel = zoom &middot; double-click = fit &middot; grey/blue ghosts = the other version's positions.</dd>
+      </dl>
+    </div>
+  </div>
 </div>
 
 <script src="bridge.js"></script>
