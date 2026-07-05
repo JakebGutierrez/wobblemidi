@@ -712,7 +712,8 @@ def humanise(
         sim_pe: dict[int, int] = {}
         sim_pn: dict[int, float] = {}
         sim_pno: dict[int, float] = {}
-        d_lo, d_hi = -math.inf, math.inf
+        d_lo, d_hi = -math.inf, math.inf     # musical interval (EPSILON, ceiling-1)
+        h_lo, h_hi = -math.inf, math.inf     # HARD encodability interval (delta>=0 in pass 3)
         for pos in range(cl["mstart"], cl["mend"] + 1):
             abs_e, ti_e, idx_e = merged[pos]
             if (ti_e, idx_e) in member_set:
@@ -727,6 +728,8 @@ def humanise(
                 )
                 d_lo = max(d_lo, lower - abs_e)
                 d_hi = min(d_hi, (upper_ex - 1) - abs_e)
+                h_lo = max(h_lo, pe - abs_e)
+                h_hi = min(h_hi, upper_ex - abs_e)
                 sim_pno[ti_e] = abs_e
             elif not tracks_will_shift[ti_e][idx_e]:
                 # fixed event between members: replay exactly what the real loop
@@ -737,11 +740,27 @@ def humanise(
                     sim_pn[ti_e] = abs_e
                     sim_pno[ti_e] = abs_e
 
-        if d_lo > d_hi:
-            delta = 0        # no interval satisfies every member: hold as written
-        else:
+        if d_lo <= d_hi:
             delta = int(max(d_lo, min(float(desired), d_hi)))
+            rigid = True
+        else:
+            # Musically-empty intersection: the cluster HOLDS as a unit. Written
+            # positions (delta 0) are the target, nudged forward uniformly only
+            # as far as hard encodability demands (a prior hit may already have
+            # emitted past a member's written tick — a negative MIDI delta is a
+            # crash, so pure delta 0 is not always available). The EPSILON
+            # separation and ceiling-1 preferences are sacrificed here: a held
+            # flam is acceptable, a smeared one is not.
+            delta = int(max(0.0, h_lo))
+            rigid = delta <= h_hi
+            if not rigid:
+                # Truly unsatisfiable (zero-length notes + a late prior hit):
+                # no shared delta is even encodable. Degrade to the legacy
+                # per-member windowing below — crash-free, smear accepted,
+                # pathological input only.
+                delta = 0
         cl["delta"] = delta
+        cl["rigid"] = rigid
         cl["planned"] = True
 
     for abs_t, ti, idx in merged:
@@ -784,9 +803,31 @@ def humanise(
                     new_vel = msg.velocity
                 else:
                     new_vel = _new_velocity(group, bucket, vel_delta_raw, msg.velocity)
-                # cluster-scope clamp already guarantees legality; the max() is a
-                # defensive guard that must never fire
-                new_abs = int(max(abs_t + cl["delta"], prev_emitted_abs[ti]))
+                if cl["rigid"]:
+                    # written position + the ONE shared delta, full stop. The
+                    # cluster-scope clamp (or the hold fallback) already chose a
+                    # delta every member can legally take — a per-member guard
+                    # here is exactly what would smear the flam.
+                    new_abs = abs_t + cl["delta"]
+                else:
+                    # pathological escape hatch (no shared delta is encodable):
+                    # legacy per-member windowing — crash-free, smear accepted
+                    candidate = abs_t + cl["delta"]
+                    if abs_t == prev_note_on_orig_abs[ti]:
+                        lower = prev_emitted_abs[ti]
+                    else:
+                        lower = max(prev_emitted_abs[ti],
+                                    prev_note_on_abs[ti] + EPSILON_TICKS)
+                    upper_exclusive = min(
+                        tracks_paired_off[ti][idx],
+                        tracks_next_fixed[ti][idx + 1]
+                        if idx + 1 < len(tracks_abs[ti]) else math.inf,
+                    )
+                    ceiling = upper_exclusive - 1
+                    if lower > ceiling:
+                        new_abs = prev_emitted_abs[ti]
+                    else:
+                        new_abs = int(max(lower, min(candidate, ceiling)))
                 out_abs[ti].append((new_abs, msg.copy(velocity=new_vel)))
                 prev_note_on_abs[ti] = new_abs
                 prev_note_on_orig_abs[ti] = abs_t

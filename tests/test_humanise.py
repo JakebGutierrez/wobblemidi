@@ -2643,3 +2643,116 @@ class TestWindowedCoupling:
         assert snare - (base + 5) == 14
         assert snare - kick == 5             # flam spacing survives the clamp
         assert snare == base + 5 + 14        # snare sits at its ceiling (off - 1)
+
+    def test_empty_intersection_holds_as_unit(self, tmp_path):
+        """Empty cluster interval: the flam HOLDS as a unit — never partially
+        bumped by per-member emit guards (the pre-fix bug: a 10-tick flam came
+        out as 6 because member 1 was pushed by a prior emitted note while
+        member 2 held at delta 0).
+
+        Setup forces the empty intersection with BOTH required ingredients:
+        a PRIOR EMITTED note landing past member 1's written tick, and a fixed
+        note_off BETWEEN the members capping member 1's ceiling below the
+        needed lower bound. The only legal rigid move is a uniform +4 nudge.
+        """
+        prof = self._prof({"kick": 40.0, "snare": 40.0})
+        # kick @1920 (len 35 → off @1955) wants +38 but its ceiling (own off)
+        # clamps it to 1954 — PAST the first snare's written tick (1950).
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+        events = [
+            (1920, "note_on", 36, 100), (1950, "note_on", 38, 90),
+            (1955, "note_off", 36, 0),  (1960, "note_on", 38, 110),
+            (2050, "note_off", 38, 0),  (2060, "note_off", 38, 0),
+        ]
+        prev = 0
+        for t, kind, n, v in events:
+            tr.append(mido.Message(kind, channel=9, note=n, velocity=v, time=t - prev))
+            prev = t
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "empty_ix.mid"
+        mid.save(str(inp))
+
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick = self._ons(out, 36)[0]
+        s1, s2 = self._ons(out, 38)
+        assert kick == 1954                      # prior hit clamped by its own off
+        assert s2 - s1 == 10, f"flam smeared: spacing {s2 - s1} (pre-fix bug gave 6)"
+        assert (s1, s2) == (1954, 1964)          # whole cluster nudged +4 as a unit
+
+    def test_windowed_cluster_uses_min_eff_of_middle_member(self, tmp_path):
+        """gap>0 clusters use cluster_min_eff over ALL members: the min-eff lane
+        here is MIDDLE in order and NOT the loudest, so a wrong-lane (loudest /
+        first / pairwise first-last) implementation lands elsewhere.
+
+        All buckets mean +50 ms, lean 1: displacement = 50ms × eff. min eff 0.2
+        → 10 ms ≈ +1 tick from the loudest member's origin. Loudest-eff (0.9)
+        would give +34, first-lane eff (0.6) +20.
+        """
+        base = 4 * self.PPQ
+        prof = self._prof({"kick": 50.0, "snare": 50.0, "hihat_closed": 50.0})
+        scales = {"kick": 0.6, "snare": 0.2, "hihat_closed": 0.9}
+        inp = self._midi(tmp_path,
+                         [(base, 36, 70), (base + 4, 38, 60), (base + 9, 42, 120)],
+                         tempo_us=500_000)
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5,
+                 push_amount=1.0, intensity_by_group=scales)
+        k = self._ons(out, 36)[0]
+        s = self._ons(out, 38)[0]
+        h = self._ons(out, 42)[0]
+        # loudest (hat @base+9): cand = grid + round(50*0.2 ms) = base+10 → delta +1
+        assert (k - base, s - (base + 4), h - (base + 9)) == (1, 1, 1), (
+            f"cluster did not use min eff: deltas "
+            f"{(k - base, s - (base + 4), h - (base + 9))}")
+
+    def test_eager_draw_order_and_stash_consumption(self, tmp_path):
+        """Sample-consumption order across adjacent windowed clusters and a
+        same-tick chord, locked via tagged velocities.
+
+        Buckets carry distinct per-draw vel_delta tags; the expected stream is
+        re-simulated with the same seeded RNG (one randint per shiftable hit in
+        merged order — the engine contract). A mis-keyed stash or out-of-order
+        eager draw assigns some hit another draw's tag and fails.
+        """
+        snare_tags = [11.0, 12.0, 13.0, 14.0, 15.0]
+        hat_tags = [21.0, 22.0, 23.0, 24.0, 25.0]
+        prof = LoadedProfile(
+            buckets={
+                "rock|beat|snare": BucketProfile(
+                    offsets=np.zeros(5), vel_deltas=np.array(snare_tags), kde=None),
+                "rock|beat|hihat_closed": BucketProfile(
+                    offsets=np.zeros(5), vel_deltas=np.array(hat_tags), kde=None),
+            },
+            velocity_thresholds={},
+            bucket_offset_means={"rock|beat|snare": 0.0,
+                                 "rock|beat|hihat_closed": 0.0},
+        )
+        # clusters A and B (6-tick flams), then a SAME-TICK chord C: the chord
+        # draws through the normal (non-stash) path, so stream continuity across
+        # the stash boundary is exercised too.
+        notes = [
+            (1920, 38, 80), (1926, 42, 60),     # cluster A (windowed)
+            (2400, 38, 80), (2406, 42, 60),     # cluster B (windowed)
+            (2880, 38, 80), (2880, 42, 60),     # chord C (same-tick, legacy path)
+        ]
+        inp = self._midi(tmp_path, notes, tempo_us=500_000, note_len=60)
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=7, phi=0.5)
+
+        # expected: one uniform-index draw per shiftable hit, in merged order
+        np.random.seed(7)
+        draw_idx = [int(np.random.randint(5)) for _ in range(6)]
+        lane_tags = [snare_tags, hat_tags, snare_tags, hat_tags, snare_tags, hat_tags]
+        bases = [80, 60, 80, 60, 80, 60]
+        expected = [round(b + tags[i]) for b, tags, i in
+                    zip(bases, lane_tags, draw_idx)]
+
+        got = []
+        for track in mido.MidiFile(str(out)).tracks:
+            for msg in track:
+                if msg.type == "note_on" and msg.velocity > 0:
+                    got.append(msg.velocity)
+        assert got == expected, f"velocities {got} != expected tags {expected}"
