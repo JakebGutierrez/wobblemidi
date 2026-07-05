@@ -22,10 +22,10 @@ from validate import (
     signed_offset_ms,
 )
 
-from pocketmidi.humanise import load_profile
-from pocketmidi.midi_utils import build_tempo_map, quantise_to_grid
+from wobblemidi.humanise import load_profile
+from wobblemidi.midi_utils import build_tempo_map, quantise_to_grid
 
-SHIPPED_PROFILE = Path(__file__).parent.parent / "pocketmidi" / "profiles" / "rock.json"
+SHIPPED_PROFILE = Path(__file__).parent.parent / "wobblemidi" / "profiles" / "rock.json"
 
 
 # ── coarsen_velocities ───────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ def _synthetic_take(ppq=480, tempo=500_000, bars=4):
     notes = np.array([n for _, n, _ in recs])
     vels = np.array([v for _, _, v in recs])
     tempo_map = [(0, tempo)]
-    from pocketmidi.midi_utils import TD11_TO_GROUP, grid_position_in_bar, ticks_to_ms_with_map
+    from wobblemidi.midi_utils import TD11_TO_GROUP, grid_position_in_bar, ticks_to_ms_with_map
     return Take(
         take_id="synthetic/take1", beat_type="beat", bpm=120.0, ppq=ppq,
         tempo_map=tempo_map, notes=notes,
@@ -241,7 +241,7 @@ def test_antirobotic_metrics_flat_vs_human(tmp_path):
     """Flat input must score worst: zero-jump mass 1.0 and within-role sigma 0.
     The human reference must show real micro-variation on both."""
     take = _synthetic_take(bars=8)
-    from pocketmidi.humanise import load_profile as _lp
+    from wobblemidi.humanise import load_profile as _lp
     prof = _lp(SHIPPED_PROFILE)
     results, _ = evaluate_level([take], "flat", {"shipped": prof}, seeds=[1], workdir=tmp_path)
 
@@ -264,7 +264,7 @@ def test_antirobotic_zero_jump_mass_coarsened_input(tmp_path):
     (The within-role direction needs real role-structured playing — that is
     what the real-GMD behaviour table validates; here we lock the mechanics.)"""
     take = _synthetic_take(bars=8)
-    from pocketmidi.humanise import load_profile as _lp
+    from wobblemidi.humanise import load_profile as _lp
     prof = _lp(SHIPPED_PROFILE)
     results, _ = evaluate_level([take], 4, {"shipped": prof}, seeds=[1], workdir=tmp_path)
     assert results["input"]["ALL"]["zjump_mass"] > results["human"]["ALL"]["zjump_mass"] * 2

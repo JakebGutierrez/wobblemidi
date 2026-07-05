@@ -1,9 +1,9 @@
-"""Tests for pocketmidi.midi_utils."""
+"""Tests for wobblemidi.midi_utils."""
 
 import pytest
 import mido
 
-from pocketmidi.midi_utils import (
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     detect_meter,

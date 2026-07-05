@@ -1,6 +1,6 @@
-"""Engine adapter for the pocketmidi GUI — UI-framework-free.
+"""Engine adapter for the wobblemidi GUI — UI-framework-free.
 
-This module is the seam between any front-end shell and the pocketmidi engine.
+This module is the seam between any front-end shell and the wobblemidi engine.
 It must stay free of pywebview (and any other UI) imports: a future thin
 web-demo server should be able to wrap Session unchanged. app.py owns windows
 and dialogs; this module owns files, state, and engine calls.
@@ -22,8 +22,8 @@ from pathlib import Path
 
 import mido
 
-from pocketmidi.humanise import DRUM_CHANNEL, humanise, load_profile
-from pocketmidi.midi_utils import (
+from wobblemidi.humanise import DRUM_CHANNEL, humanise, load_profile
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     detect_meter,
@@ -176,7 +176,7 @@ def _attach_deltas(original: dict, humanised: dict) -> None:
 
 
 def _bundled_profile_path():
-    return files("pocketmidi.profiles").joinpath("rock.json")
+    return files("wobblemidi.profiles").joinpath("rock.json")
 
 
 class Session:
@@ -190,7 +190,7 @@ class Session:
 
     def __init__(self, profile_path: str | Path | None = None) -> None:
         self._lock = threading.Lock()
-        self._tmpdir = Path(tempfile.mkdtemp(prefix="pocketmidi-gui-"))
+        self._tmpdir = Path(tempfile.mkdtemp(prefix="wobblemidi-gui-"))
         self._render_count = 0
         self.original_path: Path | None = None
         self.render_path: Path | None = None

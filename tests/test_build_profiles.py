@@ -261,7 +261,7 @@ def test_residuals_do_not_leak_across_takes():
 def test_shipped_profile_is_schema_v2():
     """The bundled rock.json must be a v2-builder artifact — guards against a
     stale or old-schema profile ever shipping again (module-13 ship contract)."""
-    shipped = Path(__file__).parent.parent / "pocketmidi" / "profiles" / "rock.json"
+    shipped = Path(__file__).parent.parent / "wobblemidi" / "profiles" / "rock.json"
     with shipped.open() as f:
         raw = json.load(f)
     meta = raw["_meta"]

@@ -1,34 +1,34 @@
-# pocketmidi
+# wobblemidi
 
 A CLI tool that humanises programmed drum MIDI using real drummer timing and velocity data.
 
-Most humanisation tools apply random noise or hand-coded guesswork. pocketmidi samples from actual drummer performances instead — so the deviations sound human because they are.
+Most humanisation tools apply random noise or hand-coded guesswork. wobblemidi samples from actual drummer performances instead — so the deviations sound human because they are.
 
 ## Install
 
 ```bash
-pip install pocketmidi
+pip install wobblemidi
 ```
 
 Or from source:
 
 ```bash
-git clone https://github.com/JakebGutierrez/pocketmidi
-cd pocketmidi
+git clone https://github.com/JakebGutierrez/wobblemidi
+cd wobblemidi
 pip install -e ".[dev]"
 ```
 
 ## Quick start
 
 ```bash
-pocketmidi drums.mid drums_humanised.mid
+wobblemidi drums.mid drums_humanised.mid
 ```
 
 By default this applies humanisation at `--intensity 0.35` using the rock profile. Turn it up
 for a looser feel:
 
 ```bash
-pocketmidi drums.mid drums_humanised.mid --intensity 0.5
+wobblemidi drums.mid drums_humanised.mid --intensity 0.5
 ```
 
 ## Flags
@@ -50,13 +50,13 @@ pocketmidi drums.mid drums_humanised.mid --intensity 0.5
 
 ## How it works
 
-pocketmidi builds a statistical profile from the [Groove MIDI Dataset](https://magenta.tensorflow.org/datasets/groove) — a collection of real drummer performances recorded on a Roland TD-11 electronic kit. For each instrument (kick, snare, hi-hat, etc.) and grid position, it captures the distribution of timing offsets and velocity deviations that real drummers produce.
+wobblemidi builds a statistical profile from the [Groove MIDI Dataset](https://magenta.tensorflow.org/datasets/groove) — a collection of real drummer performances recorded on a Roland TD-11 electronic kit. For each instrument (kick, snare, hi-hat, etc.) and grid position, it captures the distribution of timing offsets and velocity deviations that real drummers produce.
 
 When humanising, each note is snapped to the nearest 16th-note grid position, then a timing offset and velocity delta are sampled from the matching distribution and applied. The result is timing variation that reflects how an actual drummer plays, not a random number generator.
 
 **Timing is centred on the grid by default.** The raw GMD data contains directional tendencies (some drummers consistently push certain beats ahead of the grid). Without `--push`, these are removed — you get the spread and feel of real drumming without inheriting a specific drummer's rushing or dragging habit.
 
-**One clock for the kit (`--groove-tightness`).** Sampling every hit's timing independently sounds twitchy — real drummers have a single internal clock that drifts slowly. pocketmidi keeps one running timing drift for the whole kit — even when kick, snare, and hats live on separate tracks: each hit nudges it, and the hit is placed by that shared drift plus a small independent wiggle, so the kit breathes together instead of scattering. The overall amount of timing variation stays about the same at any setting; the knob mainly changes how correlated it is. Hits notated on the same tick share one nudge, across tracks too, so kit-wide accents stay tight instead of flamming.
+**One clock for the kit (`--groove-tightness`).** Sampling every hit's timing independently sounds twitchy — real drummers have a single internal clock that drifts slowly. wobblemidi keeps one running timing drift for the whole kit — even when kick, snare, and hats live on separate tracks: each hit nudges it, and the hit is placed by that shared drift plus a small independent wiggle, so the kit breathes together instead of scattering. The overall amount of timing variation stays about the same at any setting; the knob mainly changes how correlated it is. Hits notated on the same tick share one nudge, across tracks too, so kit-wide accents stay tight instead of flamming.
 
 ## MIDI compatibility
 

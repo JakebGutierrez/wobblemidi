@@ -1,4 +1,4 @@
-"""Tests for pocketmidi/cli.py"""
+"""Tests for wobblemidi/cli.py"""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ import numpy as np
 import pytest
 from click.testing import CliRunner
 
-from pocketmidi.cli import main
-from pocketmidi.humanise import BucketProfile, LoadedProfile
+from wobblemidi.cli import main
+from wobblemidi.humanise import BucketProfile, LoadedProfile
 
 # ---------------------------------------------------------------------------
 # Helpers (minimal copies of test_humanise.py utilities)
@@ -79,8 +79,8 @@ class TestHappyPath:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES):
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES):
             result = runner.invoke(main, [str(in_path), str(out_path)])
 
         assert result.exit_code == 0, result.output
@@ -91,8 +91,8 @@ class TestHappyPath:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES) as mock_lp:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES) as mock_lp:
             runner.invoke(main, [str(in_path), str(out_path)])
 
         mock_lp.assert_called_once_with(_SENTINEL)
@@ -109,7 +109,7 @@ class TestErrorHandling:
             yield  # pragma: no cover
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", raise_fnf):
+        with patch("wobblemidi.cli.as_file", raise_fnf):
             result = runner.invoke(main, [str(in_path), str(out_path), "--genre", "jazz"])
 
         assert result.exit_code == 1
@@ -120,9 +120,9 @@ class TestErrorHandling:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise", side_effect=ValueError("MIDI type 2 not supported")):
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise", side_effect=ValueError("MIDI type 2 not supported")):
             result = runner.invoke(main, [str(in_path), str(out_path)])
 
         assert result.exit_code == 1
@@ -145,8 +145,8 @@ class TestFlags:
         out2 = tmp_path / "out2.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES):
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES):
             runner.invoke(main, [str(in_path), str(out1), "--seed", "42"])
             runner.invoke(main, [str(in_path), str(out2), "--seed", "42"])
 
@@ -157,9 +157,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--section", "fill"])
 
         _, kwargs = mock_h.call_args
@@ -170,9 +170,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--intensity", "0.5"])
 
         _, kwargs = mock_h.call_args
@@ -183,8 +183,8 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES):
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES):
             result = runner.invoke(main, [str(in_path), str(out_path), "--verbose"])
 
         assert result.exit_code == 0
@@ -194,9 +194,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--timing-only"])
 
         _, kwargs = mock_h.call_args
@@ -208,9 +208,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--velocity-only"])
 
         _, kwargs = mock_h.call_args
@@ -233,9 +233,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--push"])
 
         _, kwargs = mock_h.call_args
@@ -246,9 +246,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path)])
 
         _, kwargs = mock_h.call_args
@@ -259,9 +259,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--groove-tightness", "0.7"])
 
         _, kwargs = mock_h.call_args
@@ -272,9 +272,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path)])
 
         _, kwargs = mock_h.call_args
@@ -285,9 +285,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path), "--all-channels"])
 
         _, kwargs = mock_h.call_args
@@ -298,9 +298,9 @@ class TestFlags:
         out_path = tmp_path / "out.mid"
 
         runner = CliRunner()
-        with patch("pocketmidi.cli.as_file", _fake_as_file), \
-             patch("pocketmidi.cli.load_profile", return_value=_FAKE_PROFILES), \
-             patch("pocketmidi.cli.humanise") as mock_h:
+        with patch("wobblemidi.cli.as_file", _fake_as_file), \
+             patch("wobblemidi.cli.load_profile", return_value=_FAKE_PROFILES), \
+             patch("wobblemidi.cli.humanise") as mock_h:
             runner.invoke(main, [str(in_path), str(out_path)])
 
         _, kwargs = mock_h.call_args

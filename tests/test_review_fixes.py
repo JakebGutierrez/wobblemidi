@@ -10,7 +10,7 @@ import mido
 from mido import Message, MidiFile, MidiTrack, MetaMessage
 from importlib.resources import as_file, files
 
-from pocketmidi.humanise import load_profile, humanise, _sample_bucket
+from wobblemidi.humanise import load_profile, humanise, _sample_bucket
 
 
 def _note_ons(path):
@@ -53,7 +53,7 @@ def _chord_midi(path, ppq=480):
 
 
 def _load_rock():
-    with as_file(files("pocketmidi.profiles").joinpath("rock.json")) as p:
+    with as_file(files("wobblemidi.profiles").joinpath("rock.json")) as p:
         return load_profile(p)
 
 

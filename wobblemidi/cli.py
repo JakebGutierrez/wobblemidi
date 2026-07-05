@@ -2,7 +2,7 @@ import sys
 import click
 from importlib.resources import as_file, files
 
-from pocketmidi.humanise import load_profile, humanise
+from wobblemidi.humanise import load_profile, humanise
 
 
 @click.command()
@@ -42,7 +42,7 @@ def main(input_path, output_path, genre, intensity, section, seed, verbose, timi
     if timing_only and velocity_only:
         click.echo("Error: --timing-only and --velocity-only are mutually exclusive.", err=True)
         sys.exit(1)
-    resource = files("pocketmidi.profiles").joinpath(f"{genre}.json")
+    resource = files("wobblemidi.profiles").joinpath(f"{genre}.json")
     try:
         with as_file(resource) as profile_path:
             profiles = load_profile(profile_path)

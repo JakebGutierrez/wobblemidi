@@ -1,4 +1,4 @@
-# pocketmidi — Claude Code context
+# wobblemidi — Claude Code context
 
 ## Review style
 When asked to review code or a plan, output only blocking issues — incorrect 
@@ -30,10 +30,10 @@ All tests must pass before moving to the next module.
 | # | Module | Status |
 |---|--------|--------|
 | 1 | Scaffold (pyproject.toml, dirs) | done |
-| 2 | `pocketmidi/midi_utils.py` | done |
+| 2 | `wobblemidi/midi_utils.py` | done |
 | 3 | `scripts/build_profiles.py` | done |
-| 4 | `pocketmidi/humanise.py` | done |
-| 5 | `pocketmidi/cli.py` | done |
+| 4 | `wobblemidi/humanise.py` | done |
+| 5 | `wobblemidi/cli.py` | done |
 | 6 | `tests/test_humanise.py` | done |
 | 7 | `--timing-only` / `--velocity-only` flags | done |
 | 8 | Velocity-stratified buckets + KDE sampling | done |
@@ -54,7 +54,7 @@ Build one module at a time. Use plan mode for each new module.
 
 **Instrument mapping:** Roland TD-11 only. Notes 22 and 26 are hi-hat edge
 variants not in the GM spec — they must stay in `TD11_TO_GROUP`. See
-`pocketmidi/midi_utils.py`.
+`wobblemidi/midi_utils.py`.
 
 **Grid:** 16th-note grid by default; 8th-note grid for 6/8 files. No swing/triplet in v1.
 
@@ -117,7 +117,7 @@ Ordered by musical impact:
 
 ### build_profiles.py
 Run: `python scripts/build_profiles.py <path/to/groove-v1.0.0>`
-Output: `pocketmidi/profiles/rock.json`
+Output: `wobblemidi/profiles/rock.json`
 
 Non-obvious implementation decisions:
 - **Offset computation:** `offset_ticks_to_ms` (scalar tempo) is NOT used. Instead,
@@ -135,11 +135,11 @@ Non-obvious implementation decisions:
 ## Implementation notes — cli.py
 
 ### cli.py
-Entry point: `pocketmidi <input.mid> <output.mid>`
+Entry point: `wobblemidi <input.mid> <output.mid>`
 
 Non-obvious implementation decisions:
-- **Profile resolution:** Genre maps to `pocketmidi/profiles/{genre}.json` via
-  `importlib.resources.files("pocketmidi.profiles").joinpath(...)` + `as_file()`.
+- **Profile resolution:** Genre maps to `wobblemidi/profiles/{genre}.json` via
+  `importlib.resources.files("wobblemidi.profiles").joinpath(...)` + `as_file()`.
   `as_file()` is required (not `str()`) to guarantee a real filesystem path in all
   install layouts (editable, wheel, zip-imported).
 - **`--section` flag:** User-facing name for `beat_type` — maps directly to the
@@ -147,7 +147,7 @@ Non-obvious implementation decisions:
 - **`--intensity` validation:** Uses `click.FloatRange(0.0, 1.0)` — Click rejects
   out-of-range values before `humanise()` is called.
 - **Packaging:** `[tool.hatch.build] include` covers both wheel and sdist so
-  `pocketmidi/profiles/*.json` ships in all distribution formats.
+  `wobblemidi/profiles/*.json` ships in all distribution formats.
 
 ## Implementation notes — completed modules (module 8)
 

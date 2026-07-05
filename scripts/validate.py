@@ -3,7 +3,7 @@
 Measures distance-to-human on held-out GMD rock takes. For each held-out human
 performance a "programmed" input is built — timing quantised to the 16th grid,
 velocity coarsened to a small per-instrument palette per take (a producer
-programs a contour, not micro-noise) — pocketmidi is run on it, and the output
+programs a contour, not micro-noise) — wobblemidi is run on it, and the output
 is compared against the real human original.
 
 Conditions:
@@ -11,7 +11,7 @@ Conditions:
   input     — the programmed input itself, unprocessed        (baseline a)
   gate      — old-schema profile built from the GMD *train*
               split only                                       (baseline b — THE GATE)
-  shipped   — pocketmidi/profiles/rock.json (baseline c — context only: it was
+  shipped   — wobblemidi/profiles/rock.json (baseline c — context only: it was
               built from ALL rock takes, so it has seen the held-out takes)
   candidate — optional rebuilt-schema profile (--candidate; checkpoint 3)
 
@@ -65,14 +65,14 @@ from scipy.stats import ks_2samp, spearmanr, t as t_dist, wasserstein_distance
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pocketmidi.humanise import (
+from wobblemidi.humanise import (
     LoadedProfile,
     _file_tier_thresholds,
     _velocity_tier,
     humanise,
     load_profile,
 )
-from pocketmidi.midi_utils import (
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     grid_position_in_bar,
@@ -94,7 +94,7 @@ GROUP_ORDER = [
     "tom_high", "tom_mid", "tom_low",
 ]
 GATE_PROFILE_DEFAULT = REPO_ROOT / "validation" / "gate_old_schema.json"
-SHIPPED_PROFILE = REPO_ROOT / "pocketmidi" / "profiles" / "rock.json"
+SHIPPED_PROFILE = REPO_ROOT / "wobblemidi" / "profiles" / "rock.json"
 REPORT_DEFAULT = REPO_ROOT / "validation" / "last_report.json"
 
 # (key, label, kind) — kind "prop": human column shows the reference value;

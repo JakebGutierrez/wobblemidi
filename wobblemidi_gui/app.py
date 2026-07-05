@@ -1,4 +1,4 @@
-"""pywebview shell for the pocketmidi GUI.
+"""pywebview shell for the wobblemidi GUI.
 
 This module owns the window, native file dialogs, and the js_api bridge ONLY.
 All engine access lives in adapter.py, which must stay pywebview-free — it is
@@ -14,11 +14,11 @@ from pathlib import Path
 
 import webview
 
-from pocketmidi_gui import adapter
+from wobblemidi_gui import adapter
 
 WEB_DIR = Path(__file__).parent / "web"
 
-WINDOW_TITLE = "pocketmidi"
+WINDOW_TITLE = "wobblemidi"
 
 MIDI_FILE_TYPES = ("MIDI files (*.mid;*.midi)", "All files (*.*)")
 
@@ -66,7 +66,7 @@ class Api:
         return {"ok": True}
 
     def autoload(self) -> dict:
-        """Load the file given on the command line (pocketmidi-gui song.mid), once."""
+        """Load the file given on the command line (wobblemidi-gui song.mid), once."""
         path, self._autoload_path = self._autoload_path, None
         if not path:
             return {"ok": False, "none": True}

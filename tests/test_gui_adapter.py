@@ -1,4 +1,4 @@
-"""Tests for pocketmidi_gui/adapter.py — the UI-free engine adapter.
+"""Tests for wobblemidi_gui/adapter.py — the UI-free engine adapter.
 
 Uses the real bundled rock.json profile (loaded once per module) so profile
 resolution from the installed package is exercised too. No pywebview needed:
@@ -13,8 +13,8 @@ from pathlib import Path
 import mido
 import pytest
 
-from pocketmidi_gui import adapter
-from pocketmidi_gui.adapter import LANE_ORDER, Session, parse_for_display
+from wobblemidi_gui import adapter
+from wobblemidi_gui.adapter import LANE_ORDER, Session, parse_for_display
 
 DEFAULT_PPQ = 480
 DEFAULT_TEMPO_US = 500_000  # 120 BPM
@@ -321,7 +321,7 @@ class TestSeam:
     def test_adapter_is_pywebview_free(self):
         """adapter.py is the future web-demo seam — importing it must not pull
         in pywebview (only app.py may)."""
-        assert "pocketmidi_gui.adapter" in sys.modules
+        assert "wobblemidi_gui.adapter" in sys.modules
         assert "webview" not in sys.modules
 
 

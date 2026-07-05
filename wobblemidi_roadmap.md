@@ -1,11 +1,11 @@
-# pocketmidi — plan & decisions
+# wobblemidi — plan & decisions
 
 _Last updated: 2026-07-03. Working doc: shipped state, parked backlog, and decisions. Update it as things move._
 
 ## Status at a glance
 - **Step 1 — engine fixes:** ✓ shipped.
 - **Step 2 — ear test:** ✓ done (confounded → led to the 0.35 default).
-- **Step 3 — rebuild design:** ✓ done (`pocketmidi_rebuild_spec.md` v2 + addendum, both Codex-reviewed).
+- **Step 3 — rebuild design:** ✓ done (`wobblemidi_rebuild_spec.md` v2 + addendum, both Codex-reviewed).
 - **Step 4 — velocity rebuild (module 13):** ✓ **SHIPPED.** Live in the bundled `rock.json`, CLI serves it by default.
 - **Next:** nothing required. Optional rounds parked below. Recommended move: use the tool on real tracks and let that pick the next round.
 

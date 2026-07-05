@@ -1,8 +1,8 @@
-# pocketmidi — Step 3 spec v2: velocity rebuild + validation harness
+# wobblemidi — Step 3 spec v2: velocity rebuild + validation harness
 
 _Design spec, revised after Codex design review. Covers the module-13 velocity rebuild, the
 supporting profile-schema changes, and the validation harness that gates it. Numbers come from
-the GMD measurements in `pocketmidi_roadmap.md` — read that first._
+the GMD measurements in `wobblemidi_roadmap.md` — read that first._
 
 ## What changed from v1 (post-review)
 - **B3 (static per-song feel-offset) removed from this rebuild.** It double-counts with the frozen
@@ -64,7 +64,7 @@ Keep `[[offset, vel_delta], …]` pairs (preserves the 2D-KDE upgrade path). Onl
 
 ---
 
-## Part B — runtime changes (`pocketmidi/humanise.py`)
+## Part B — runtime changes (`wobblemidi/humanise.py`)
 
 ### B1. Velocity: small residual on user contour
 `new_vel = msg.velocity + sampled_vel_delta * intensity` — shape unchanged, but the sampled delta
@@ -100,7 +100,7 @@ selects the timing bucket too). Rules (from review):
    grid; coarsen velocity to a **4-level per-instrument palette per take** (O1) — a producer
    programs a contour, not micro-noise. Also run 2-level, 8-level, and flat as sensitivity/stress
    cases, not as the gate.
-3. Run pocketmidi on the programmed input.
+3. Run wobblemidi on the programmed input.
 4. Compare against the real human original: programmed input vs current-schema (train-split) vs
    rebuilt-schema output.
 

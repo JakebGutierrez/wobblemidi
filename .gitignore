@@ -206,7 +206,7 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 
-# pocketmidi
+# wobblemidi
 # Throwaway A/B ear-test samples (regenerate via scripts/make_demo.py).
 # The committed demo/rock_4bar_*.mid reference demos are intentionally kept.
 demo/eartest/

@@ -4,7 +4,7 @@ Usage:
     python scripts/build_profiles.py <path/to/groove-v1.0.0>
 
 Output:
-    pocketmidi/profiles/rock.json
+    wobblemidi/profiles/rock.json
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ import pandas as pd
 # Allow running from the repo root without installing the package.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pocketmidi.humanise import _file_tier_thresholds
-from pocketmidi.humanise import _velocity_tier as _role_tier
-from pocketmidi.midi_utils import (
+from wobblemidi.humanise import _file_tier_thresholds
+from wobblemidi.humanise import _velocity_tier as _role_tier
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     grid_position_in_bar,
@@ -38,7 +38,7 @@ VELOCITY_FLOOR = 20
 KICK_SNARE_GROUPS = {"kick", "snare"}
 STRATIFIED_GROUPS = {"kick", "snare"}  # only these get velocity tier buckets
 KDE_BW_METHOD = "scott"  # change to "silverman" or a float if hi-hat sounds smeared
-OUTPUT_FILE = Path(__file__).parent.parent / "pocketmidi" / "profiles" / "rock.json"
+OUTPUT_FILE = Path(__file__).parent.parent / "wobblemidi" / "profiles" / "rock.json"
 
 
 def _velocity_tier(velocity: float, thresholds: tuple[float, float]) -> str:
@@ -429,7 +429,7 @@ def build_profile_output(raw_hits: list[dict]) -> tuple[dict, int, int]:
 @click.option("--output", "output_path", type=click.Path(dir_okay=False, path_type=Path),
               default=OUTPUT_FILE, show_default=True, help="Where to write the profile JSON.")
 def main(gmd_dir: Path, split: str, output_path: Path) -> None:
-    """Ingest GMD rock files and write timing/velocity profiles to pocketmidi/profiles/rock.json."""
+    """Ingest GMD rock files and write timing/velocity profiles to wobblemidi/profiles/rock.json."""
     info = pd.read_csv(gmd_dir / "info.csv")
     rock = info[info["style"].str.startswith("rock")]
     if split == "train":

@@ -17,7 +17,7 @@ from importlib.resources import as_file, files
 import mido
 from mido import Message, MetaMessage, MidiFile, MidiTrack
 
-from pocketmidi.humanise import humanise, load_profile
+from wobblemidi.humanise import humanise, load_profile
 
 PPQ = 480
 SIXTEENTH = PPQ // 4      # 120 ticks
@@ -84,7 +84,7 @@ def main() -> None:
     src = outdir / "rock_4bar_input.mid"
     write_midi(src, build_beat())
 
-    with as_file(files("pocketmidi.profiles").joinpath("rock.json")) as p:
+    with as_file(files("wobblemidi.profiles").joinpath("rock.json")) as p:
         prof = load_profile(p)
 
     phi0 = outdir / "rock_4bar_phi0.mid"

@@ -15,7 +15,7 @@ import mido
 import numpy as np
 from scipy.stats import gaussian_kde
 
-from pocketmidi.midi_utils import (
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     detect_meter,
@@ -443,7 +443,7 @@ def humanise(
         # Legacy (no-means) profile: there is no stored lean to remove/scale/mirror,
         # so any lean setting is a silent no-op. Say so once rather than nothing.
         print(
-            "pocketmidi: note — this profile stores no per-bucket lean means "
+            "wobblemidi: note — this profile stores no per-bucket lean means "
             "(legacy schema); lean/push_amount has no effect.",
             file=sys.stderr,
         )

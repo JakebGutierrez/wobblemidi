@@ -1,6 +1,6 @@
-# pocketmidi — Step 3 spec addendum (post-Checkpoint-3)
+# wobblemidi — Step 3 spec addendum (post-Checkpoint-3)
 
-_Addendum to `pocketmidi_rebuild_spec.md` v2. Two fixes surfaced by the Checkpoint-3 re-measure.
+_Addendum to `wobblemidi_rebuild_spec.md` v2. Two fixes surfaced by the Checkpoint-3 re-measure.
 Read the Checkpoint-3 result first for context._
 
 ## Context — why this addendum exists

@@ -32,8 +32,8 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from pocketmidi.humanise import RESIDUAL_SHARE
-from pocketmidi.midi_utils import (
+from wobblemidi.humanise import RESIDUAL_SHARE
+from wobblemidi.midi_utils import (
     TD11_TO_GROUP,
     build_tempo_map,
     grid_position_in_bar,

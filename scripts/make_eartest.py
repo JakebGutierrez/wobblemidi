@@ -11,7 +11,7 @@ so the results can be A/B'd in a DAW:
     demo/eartest/{pattern}_new.mid     --candidate profile ("after")
 
 To A/B against a historical profile, extract it from git first, e.g.:
-    git show <commit>:pocketmidi/profiles/rock.json > demo/eartest/before.json
+    git show <commit>:wobblemidi/profiles/rock.json > demo/eartest/before.json
     python scripts/make_eartest.py --old demo/eartest/before.json
 
 What to listen for: with the old profile, snare ghosts jump loud / backbeats duck
@@ -33,7 +33,7 @@ import mido
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from pocketmidi.humanise import humanise, load_profile
+from wobblemidi.humanise import humanise, load_profile
 
 PPQ = 480
 SIXTEENTH = PPQ // 4
@@ -108,7 +108,7 @@ def build_input(pattern: list) -> mido.MidiFile:
 
 @click.command()
 @click.option("--old", "old_profile", type=click.Path(exists=True, dir_okay=False, path_type=Path),
-              default=REPO_ROOT / "pocketmidi" / "profiles" / "rock.json", show_default=True,
+              default=REPO_ROOT / "wobblemidi" / "profiles" / "rock.json", show_default=True,
               help="The 'before' profile.")
 @click.option("--candidate", type=click.Path(exists=True, dir_okay=False, path_type=Path),
               default=REPO_ROOT / "validation" / "candidate_new_schema.json", show_default=True,

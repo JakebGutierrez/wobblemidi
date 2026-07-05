@@ -1,4 +1,4 @@
-"""Tests for pocketmidi/humanise.py"""
+"""Tests for wobblemidi/humanise.py"""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import mido
 import numpy as np
 import pytest
 
-from pocketmidi.humanise import (
+from wobblemidi.humanise import (
     COUPLED_RESIDUAL_MS,
     EPSILON_TICKS,
     BucketProfile,
@@ -22,7 +22,7 @@ from pocketmidi.humanise import (
     humanise,
     load_profile,
 )
-from pocketmidi.midi_utils import build_tempo_map, ticks_to_ms_with_map
+from wobblemidi.midi_utils import build_tempo_map, ticks_to_ms_with_map
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1978,7 +1978,7 @@ class TestVelDrift:
 # Module 13 (spec B4) — relative velocity tiering
 # ---------------------------------------------------------------------------
 
-from pocketmidi.humanise import (  # noqa: E402  (grouped with the tests that use them)
+from wobblemidi.humanise import (  # noqa: E402  (grouped with the tests that use them)
     RELATIVE_TIER_MIN_HITS,
     RELATIVE_TIER_MIN_SPREAD,
     _file_tier_thresholds,
