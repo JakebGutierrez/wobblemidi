@@ -538,3 +538,37 @@ GUI exposes this as lane-select (INTENSITY knob scoped to a clicked lane); TIGHT
 LEAN stay kit-wide in the UI to match the engine truth. A per-lane fader bank (808
 style) is the noted future UI if per-drum use expands. CLI flags for both params:
 deferred.
+
+## Implementation notes — time-windowed chord coupling (COUPLE_WINDOW_MS)
+
+Codex-design-reviewed; shipped 2026-07-05. Generalises same-tick coupling outward by a
+small REAL-TIME window so close-spaced ornaments (snare flams, grace notes) move as one
+rigid unit instead of scattering. Safety, not drama — subtle or nothing.
+
+- **Membership:** consecutive shiftable hits whose elapsed time from the cluster's FIRST
+  hit is `<= COUPLE_WINDOW_MS` (12.0, module constant, ear-tunable, NOT a CLI knob),
+  measured via `ticks_to_ms_with_map` (PPQ alone is not time). Inclusive boundary,
+  test-locked in ms at 1 tick = 1 ms tempo.
+- **Only gap>0 clusters take the new path.** Same-tick (zero-gap) clusters keep the
+  existing anchor+residual behaviour BYTE-FOR-BYTE, singletons stay solo, phi==0 still
+  disables all coupling — locked by `test_pre_round3_fixture_regression` against real
+  pre-round-3 engine output (fixtures from commit 63862a1^, recipe in the test docstring).
+- **One rigid shared tick delta** per cluster: sourced from the LOUDEST member's sample
+  (main stroke leads, grace follows; velocity ties → earliest in merged order), scaled by
+  `cluster_min_eff` (min `_eff` across ALL members, computed before emission — deliberately
+  NOT the exact-tick `tick_min_eff`), clock stepped ONCE on the loudest member's centred
+  sample. No per-member residuals.
+- **Cluster-scope clamp (the anti-wonk guarantee):** each member's legal delta interval
+  vs its own fixed context (own note_off, next fixed event, prior emitted state, with
+  intervening fixed events replayed via a small simulation) is INTERSECTED and the one
+  shared delta clamped once. Members are never clamped independently — that is what would
+  collapse a flam. Member-vs-member spacing needs no constraint: the shared delta
+  preserves original gaps (>= EPSILON_TICKS). Empty intersection → delta 0 (hold as
+  written).
+- **RNG contract preserved:** members' samples are drawn eagerly IN MERGED ORDER at the
+  first member's turn (members are consecutive shiftable hits, so the global stream is
+  unchanged); velocities still come from each member's own sample at its own loop turn
+  (vel clock order untouched). Files without gap>0 clusters are byte-identical to before.
+- Ride-alongs in the same commit: `intensity_by_group` finite-value guard (nan passed a
+  bare `v < 0`), 3-lane MIN-eff lock, pre-round-3 fixture regression replacing the
+  self-comparing push-endpoint test, −1 MIRROR locked on the phi==0 bypass too.

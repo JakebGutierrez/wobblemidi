@@ -2155,7 +2155,8 @@ class TestLeanAndPerGroupIntensity:
 
     # -- builders -----------------------------------------------------------
 
-    def _prof(self, kick_m=50.0, hat_m=-30.0, spread=True, means=True) -> LoadedProfile:
+    def _prof(self, kick_m=50.0, hat_m=-30.0, spread=True, means=True,
+              snare_m=None) -> LoadedProfile:
         def bucket(m):
             if spread:
                 offs = np.array([-20.0, -10.0, 0.0, 10.0, 20.0]) + m
@@ -2168,6 +2169,8 @@ class TestLeanAndPerGroupIntensity:
             "rock|beat|kick": bucket(kick_m),
             "rock|beat|hihat_closed": bucket(hat_m),
         }
+        if snare_m is not None:
+            buckets["rock|beat|snare"] = bucket(snare_m)
         means_d = ({k: float(np.mean(b.offsets)) for k, b in buckets.items()}
                    if means else {})
         return LoadedProfile(buckets=buckets, velocity_thresholds={},
@@ -2226,24 +2229,37 @@ class TestLeanAndPerGroupIntensity:
                     out.append((t, msg.velocity))
         return sorted(out)
 
-    # -- byte-equality matrices ----------------------------------------------
+    # -- regression vs the PRE-round-3 engine (real historical bytes) ------------
 
-    def test_push_amount_equivalence_matrix(self, tmp_path):
-        """{None/0.0 ≡ old default, 1.0 ≡ old push=True} × {phi=0, phi>0}, multi-track."""
+    def test_pre_round3_fixture_regression(self, tmp_path):
+        """Current engine reproduces the pre-round-3 engine byte-for-byte at the
+        push endpoints, via BOTH spellings (push bool and push_amount).
+
+        Fixtures in tests/fixtures/pre_r3_push{0,1}_phi{00,05}.mid were generated
+        by running humanise() from commit 63862a1^ (e9401a4 — before push_amount,
+        intensity_by_group, and windowed coupling) on exactly the builders below
+        with seed 42, intensity 1.0. A self-comparison (push vs push_amount, both
+        through the current code) cannot catch semantic drift — this can.
+
+        The fixture input is multi-track with SAME-TICK chords every beat, so
+        this also locks that time-windowed coupling leaves zero-gap (same-tick)
+        clusters and solo hits byte-identical, at phi=0 AND phi>0.
+        """
         prof = self._prof()
         inp = self._two_lane_midi(tmp_path, same_tick=True)
-        cases = [
-            (dict(push=False), dict(push_amount=0.0)),
-            (dict(push=True), dict(push_amount=1.0)),
-            (dict(push=False), dict()),          # None default ≡ old default
-        ]
-        for phi in (0.0, 0.5):
-            for old_kw, new_kw in cases:
+        fixdir = Path(__file__).parent / "fixtures"
+        for push in (False, True):
+            for phi in (0.0, 0.5):
+                fixture = (fixdir /
+                           f"pre_r3_push{int(push)}_phi{str(phi).replace('.', '')}.mid")
+                expected = fixture.read_bytes()
                 a = tmp_path / "a.mid"
+                humanise(inp, a, prof, intensity=1.0, seed=42, phi=phi, push=push)
+                assert a.read_bytes() == expected, ("push bool drifted", push, phi)
                 b = tmp_path / "b.mid"
-                humanise(inp, a, prof, intensity=1.0, seed=42, phi=phi, **old_kw)
-                humanise(inp, b, prof, intensity=1.0, seed=42, phi=phi, **new_kw)
-                assert a.read_bytes() == b.read_bytes(), (phi, old_kw, new_kw)
+                humanise(inp, b, prof, intensity=1.0, seed=42, phi=phi,
+                         push_amount=1.0 if push else 0.0)
+                assert b.read_bytes() == expected, ("push_amount drifted", push, phi)
 
     def test_intensity_by_group_none_empty_identical(self, tmp_path):
         prof = self._prof()
@@ -2264,31 +2280,34 @@ class TestLeanAndPerGroupIntensity:
 
         ms-level with tolerance (tick rounding), not per-hit byte equality.
         Constant-offset bucket (m=+50, stored mean 50) → deterministic even at
-        phi>0 (centred sample and residual sigma are both zero).
+        phi>0 (centred sample and residual sigma are both zero). Runs on BOTH
+        the phi==0 exact-bypass path and the phi>0 drift path — the two de-bias
+        sites are separate code.
         """
         prof = self._prof(kick_m=50.0, spread=False)
         inp = self._kick_line(tmp_path)
         grid = [4 * self.PPQ * (i + 1) for i in range(8)]
 
-        def mean_delta_ms(amount):
-            out = tmp_path / f"lean_{amount}.mid"
-            humanise(inp, out, prof, intensity=1.0, seed=5, phi=0.4,
+        def mean_delta_ms(amount, phi):
+            out = tmp_path / f"lean_{amount}_{phi}.mid"
+            humanise(inp, out, prof, intensity=1.0, seed=5, phi=phi,
                      push_amount=amount)
             ticks = [t for t, _v in self._note_events(out, 36)]
             deltas = [(t - g) * self.MS_PER_TICK for t, g in zip(ticks, grid)]
             return float(np.mean(deltas))
 
-        d_pos = mean_delta_ms(1.0)
-        d_neg = mean_delta_ms(-1.0)
-        d_zero = mean_delta_ms(0.0)
-        d_half = mean_delta_ms(0.5)
-        tol = 2.0 * self.MS_PER_TICK
-        assert d_pos == pytest.approx(50.0, abs=tol)
-        assert d_zero == pytest.approx(0.0, abs=tol)
-        # reflection about the a=0 mean
-        assert d_neg - d_zero == pytest.approx(-(d_pos - d_zero), abs=tol)
-        # linearity spot check
-        assert d_half == pytest.approx(d_zero + 0.5 * (d_pos - d_zero), abs=tol)
+        for phi in (0.0, 0.4):
+            d_pos = mean_delta_ms(1.0, phi)
+            d_neg = mean_delta_ms(-1.0, phi)
+            d_zero = mean_delta_ms(0.0, phi)
+            d_half = mean_delta_ms(0.5, phi)
+            tol = 2.0 * self.MS_PER_TICK
+            assert d_pos == pytest.approx(50.0, abs=tol), phi
+            assert d_zero == pytest.approx(0.0, abs=tol), phi
+            # reflection about the a=0 mean
+            assert d_neg - d_zero == pytest.approx(-(d_pos - d_zero), abs=tol), phi
+            # linearity spot check
+            assert d_half == pytest.approx(d_zero + 0.5 * (d_pos - d_zero), abs=tol), phi
 
     def test_legacy_profile_lean_noop(self, tmp_path, capsys):
         """No stored means → any lean is a byte-identical no-op, with a stderr note."""
@@ -2335,6 +2354,44 @@ class TestLeanAndPerGroupIntensity:
                 assert abs(d - expected_ticks) <= 2, (
                     f"anchor not governed by min eff: displacement {d} ticks, "
                     f"expected ~{expected_ticks} (0.8-eff would be ~{wrong_ticks})")
+
+    def test_chord_min_eff_three_lanes(self, tmp_path):
+        """MIN over ALL members of a 3-lane chord — the tightest lane governs.
+
+        The two-lane version would pass a broken pairwise/adjacent-min
+        implementation; with three lanes the minimum (snare, 0.2) is neither the
+        loudest, the first, nor the last member.
+        """
+        prof = self._prof(kick_m=50.0, hat_m=50.0, snare_m=50.0, spread=False)
+        scales = {"kick": 0.5, "snare": 0.2, "hihat_closed": 0.8}
+        mid = mido.MidiFile(type=1, ticks_per_beat=self.PPQ)
+        cond = mido.MidiTrack(); mid.tracks.append(cond)
+        cond.append(mido.MetaMessage("set_tempo", tempo=self.TEMPO_US, time=0))
+        cond.append(mido.MetaMessage("end_of_track", time=0))
+        for note, vel in ((36, 110), (38, 90), (42, 60)):
+            tr = mido.MidiTrack(); mid.tracks.append(tr)
+            prev = 0
+            for i in range(8):
+                t = 4 * self.PPQ + i * self.PPQ
+                tr.append(mido.Message("note_on", channel=9, note=note,
+                                       velocity=vel, time=t - prev))
+                tr.append(mido.Message("note_off", channel=9, note=note,
+                                       velocity=0, time=200))
+                prev = t + 200
+            tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "three_lane.mid"
+        mid.save(str(inp))
+
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=3, phi=0.5,
+                 push_amount=1.0, intensity_by_group=scales)
+        expected = round((50.0 * 0.2) / self.MS_PER_TICK)   # min eff governs: ~10
+        grid = [4 * self.PPQ + i * self.PPQ for i in range(8)]
+        for note in (36, 38, 42):
+            ticks = [t for t, _ in self._note_events(out, note)]
+            for t, g in zip(ticks, grid):
+                assert abs((t - g) - expected) <= 2, (
+                    f"note {note}: displacement {t - g}, expected ~{expected}")
 
     def test_changing_lane_eff_leaves_other_lanes_identical(self, tmp_path):
         """Cross-lane isolation where legitimate — and the honest shared-clock
@@ -2405,11 +2462,184 @@ class TestLeanAndPerGroupIntensity:
         out = tmp_path / "v.mid"
         with pytest.raises(ValueError, match="unknown instrument group"):
             humanise(inp, out, prof, intensity_by_group={"cowbell": 1.0})
-        with pytest.raises(ValueError, match="must be >= 0"):
+        with pytest.raises(ValueError, match="finite value >= 0"):
             humanise(inp, out, prof, intensity_by_group={"kick": -0.1})
+        # nan slips through a bare `v < 0` check (nan < 0 is False); inf would
+        # silently blow up tick conversion — both must be rejected explicitly
+        with pytest.raises(ValueError, match="finite value >= 0"):
+            humanise(inp, out, prof, intensity_by_group={"kick": float("nan")})
+        with pytest.raises(ValueError, match="finite value >= 0"):
+            humanise(inp, out, prof, intensity_by_group={"kick": float("inf")})
         with pytest.raises(ValueError, match="mutually exclusive"):
             humanise(inp, out, prof, push=True, push_amount=0.5)
         with pytest.raises(ValueError, match="must be in"):
             humanise(inp, out, prof, push_amount=1.5)
         with pytest.raises(ValueError, match="must be in"):
             humanise(inp, out, prof, push_amount=-1.5)
+
+
+# ---------------------------------------------------------------------------
+# TestWindowedCoupling — COUPLE_WINDOW_MS clusters (flams / grace notes)
+# Close-spaced ornaments move as ONE rigid unit: shared tick delta from the
+# LOUDEST member's sample scaled by the cluster MIN eff, clamped once at
+# cluster scope. Same-tick behaviour is regression-locked separately
+# (test_pre_round3_fixture_regression — the fixtures predate the window).
+# Constant-offset buckets with stored means make every expectation exact:
+# the centred sample and residual sigma are both zero, so at push_amount=1.0
+# the desired displacement is exactly the bucket mean.
+# ---------------------------------------------------------------------------
+
+class TestWindowedCoupling:
+    PPQ = 480
+
+    def _prof(self, ms_by_group: dict[str, float]) -> LoadedProfile:
+        key = {"kick": "rock|beat|kick", "snare": "rock|beat|snare",
+               "hihat_closed": "rock|beat|hihat_closed"}
+        buckets = {
+            key[g]: BucketProfile(offsets=np.array([m, m, m]),
+                                  vel_deltas=np.zeros(3), kde=None)
+            for g, m in ms_by_group.items()
+        }
+        return LoadedProfile(
+            buckets=buckets, velocity_thresholds={},
+            bucket_offset_means={k: float(b.offsets[0]) for k, b in buckets.items()},
+        )
+
+    def _midi(self, tmp_path, notes, tempo_us, note_len=100, name="in.mid") -> Path:
+        """Single track; notes = [(tick, midi_note, velocity), ...] sorted."""
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=tempo_us, time=0))
+        events = [(t, 1, n, v) for t, n, v in notes]
+        events += [(t + note_len, 0, n, 0) for t, n, _v in notes]
+        events.sort()
+        prev = 0
+        for t, kind, n, v in events:
+            tr.append(mido.Message("note_on" if kind else "note_off",
+                                   channel=9, note=n, velocity=v, time=t - prev))
+            prev = t
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        p = tmp_path / name
+        mid.save(str(p))
+        return p
+
+    def _ons(self, path, note=None):
+        out = []
+        for tr in mido.MidiFile(str(path)).tracks:
+            t = 0
+            for msg in tr:
+                t += msg.time
+                if msg.type == "note_on" and msg.velocity > 0:
+                    if note is None or msg.note == note:
+                        out.append(t)
+        return out
+
+    def test_flam_gap_preserved(self, tmp_path):
+        """A 2-note snare flam moves as a unit: internal spacing EXACTLY intact,
+        both notes displaced by the same nonzero delta — not collapsed to one
+        tick, not scattered."""
+        # 120 BPM: 6 ticks = 6.25 ms < 12 ms window. Grace (soft) then main (loud).
+        base = 4 * self.PPQ
+        inp = self._midi(tmp_path, [(base, 38, 40), (base + 6, 38, 110)],
+                         tempo_us=500_000)
+        out = tmp_path / "out.mid"
+        humanise(inp, out, self._prof({"snare": 40.0}), intensity=1.0, seed=1,
+                 phi=0.5, push_amount=1.0)
+        a, b = self._ons(out, 38)
+        assert b - a == 6, f"flam spacing distorted: {b - a} ticks"
+        # loudest (main, on-grid at base+6? no — grid of base+6 is base) drives:
+        # cand = quantise(base+6) + 40ms = base + 38 ticks → delta = 32
+        assert a - base == 32
+        assert b - (base + 6) == 32
+
+    def test_loudest_member_drives_cluster(self, tmp_path):
+        """The accented stroke sources the timing, whichever comes first.
+
+        kick bucket mean = +10 ms, snare bucket mean = +40 ms: whoever drives is
+        readable straight off the shared displacement."""
+        base = 4 * self.PPQ
+        prof = self._prof({"kick": 10.0, "snare": 40.0})
+        # snare louder → snare's bucket drives: cand = base + 38 → delta = 33
+        inp = self._midi(tmp_path, [(base, 36, 60), (base + 5, 38, 120)],
+                         tempo_us=500_000, name="snare_loud.mid")
+        out = tmp_path / "o1.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick, snare = self._ons(out, 36)[0], self._ons(out, 38)[0]
+        assert kick - base == 33 and snare - (base + 5) == 33
+        # kick louder → kick's bucket drives: cand = base + 10 → delta = 10
+        inp2 = self._midi(tmp_path, [(base, 36, 120), (base + 5, 38, 60)],
+                          tempo_us=500_000, name="kick_loud.mid")
+        out2 = tmp_path / "o2.mid"
+        humanise(inp2, out2, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick2, snare2 = self._ons(out2, 36)[0], self._ons(out2, 38)[0]
+        assert kick2 - base == 10 and snare2 - (base + 5) == 10
+
+    def test_cluster_shares_one_delta_three_members(self, tmp_path):
+        base = 4 * self.PPQ
+        prof = self._prof({"kick": 50.0, "snare": 50.0, "hihat_closed": 50.0})
+        inp = self._midi(tmp_path,
+                         [(base, 36, 110), (base + 4, 38, 80), (base + 9, 42, 60)],
+                         tempo_us=500_000)
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        k, s, h = self._ons(out, 36)[0], self._ons(out, 38)[0], self._ons(out, 42)[0]
+        deltas = {k - base, s - (base + 4), h - (base + 9)}
+        assert len(deltas) == 1, f"members did not share one delta: {deltas}"
+        assert s - k == 4 and h - s == 5   # internal spacing intact
+
+    def test_window_boundary_in_ms(self, tmp_path):
+        """Inclusive boundary, measured in REAL ms through the tempo map.
+
+        125 BPM, PPQ 480 → 1 tick = exactly 1.0 ms. A 12-tick pair (12.0 ms)
+        couples; a 13-tick pair (13.0 ms) does not. Different bucket means make
+        coupled vs independent behaviour exactly predictable."""
+        base = 4 * self.PPQ
+        tempo = 480_000                      # 125 BPM → 1 ms per tick
+        prof = self._prof({"kick": 10.0, "snare": 40.0})
+        # 12 ms apart → coupled; snare (louder) drives: cand = base+40 → delta 28
+        inp = self._midi(tmp_path, [(base, 36, 60), (base + 12, 38, 120)],
+                         tempo_us=tempo, name="at12.mid")
+        out = tmp_path / "c.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick, snare = self._ons(out, 36)[0], self._ons(out, 38)[0]
+        assert kick - base == 28 and snare - (base + 12) == 28
+        assert snare - kick == 12            # rigid
+        # 13 ms apart → NOT coupled; each lane goes to its own bucket mean
+        inp2 = self._midi(tmp_path, [(base, 36, 60), (base + 13, 38, 120)],
+                          tempo_us=tempo, name="at13.mid")
+        out2 = tmp_path / "u.mid"
+        humanise(inp2, out2, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick2, snare2 = self._ons(out2, 36)[0], self._ons(out2, 38)[0]
+        assert kick2 - base == 10            # kick solo → its own +10 ms
+        assert snare2 - (base + 13) == 27    # snare solo → grid + 40 → +27 from origin
+        assert snare2 - kick2 != 13          # spacing NOT rigidly preserved
+
+    def test_cluster_clamp_is_cluster_scoped(self, tmp_path):
+        """A member pinned by its own note_off constrains the WHOLE cluster's
+        shared delta — flam spacing survives; nobody is clamped independently."""
+        base = 4 * self.PPQ
+        prof = self._prof({"kick": 40.0, "snare": 40.0})
+        # kick (loudest) wants +38 ticks; snare's own note_off at +15 caps the
+        # snare's delta at 14 → the CLUSTER moves 14, spacing stays 5.
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+        events = [
+            (base, "note_on", 36, 120), (base + 5, "note_on", 38, 90),
+            (base + 5 + 15, "note_off", 38, 0), (base + 300, "note_off", 36, 0),
+        ]
+        prev = 0
+        for t, kind, n, v in events:
+            tr.append(mido.Message(kind, channel=9, note=n, velocity=v, time=t - prev))
+            prev = t
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "clamp.mid"
+        mid.save(str(inp))
+
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick, snare = self._ons(out, 36)[0], self._ons(out, 38)[0]
+        assert kick - base == 14, f"cluster not clamped as a unit (kick delta {kick - base})"
+        assert snare - (base + 5) == 14
+        assert snare - kick == 5             # flam spacing survives the clamp
+        assert snare == base + 5 + 14        # snare sits at its ceiling (off - 1)

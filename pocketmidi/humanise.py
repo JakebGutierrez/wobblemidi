@@ -22,6 +22,7 @@ from pocketmidi.midi_utils import (
     grid_position_in_bar,
     is_four_four,
     quantise_to_grid,
+    ticks_to_ms_with_map,
 )
 
 EPSILON_TICKS = 1
@@ -326,6 +327,13 @@ RESIDUAL_SHARE = 0.15          # β: the residual's share of a solo hit's timing
 COUPLED_RESIDUAL_FRAC = 0.15   # coupled-hit scatter as a fraction of its own centred sample …
 COUPLED_RESIDUAL_MS = 1.0      # … capped so each coupled member stays within ±1 ms of the shared nudge
 
+# Time-windowed coupling (phi > 0 only). Shiftable hits whose REAL elapsed time
+# from a cluster's first hit is <= this window (inclusive; measured through the
+# tempo map — PPQ alone is not time) move as ONE rigid unit: close-spaced
+# ornaments (snare flams, grace notes) must not be scattered or smeared by
+# independent sampling. Conservative by design; tunable by ear, NOT a CLI knob.
+COUPLE_WINDOW_MS = 12.0
+
 # Velocity drift (module 13 / spec B2). GMD kick velocity has genuine hit-to-hit
 # memory (train-split lag-1 r=+0.317 → PHI_VEL = r/(1-RESIDUAL_SHARE), see
 # scripts/calibrate_phi.py); snare/hats/ride/crash are ~white (r 0.07–0.16), so
@@ -425,8 +433,12 @@ def humanise(
                 f"unknown instrument group(s) in intensity_by_group: {sorted(unknown)}"
             )
         for g, v in intensity_by_group.items():
-            if v < 0:
-                raise ValueError(f"intensity_by_group[{g!r}] must be >= 0, got {v}")
+            # explicit finite check: nan slips through a bare `v < 0` (nan >= 0
+            # is False but so is nan < 0), and inf would silently blow up ticks
+            if not math.isfinite(v) or v < 0:
+                raise ValueError(
+                    f"intensity_by_group[{g!r}] must be a finite value >= 0, got {v}"
+                )
     if push_amount is not None and push_amount != 1.0 and not profiles.bucket_offset_means:
         # Legacy (no-means) profile: there is no stored lean to remove/scale/mirror,
         # so any lean setting is a silent no-op. Say so once rather than nothing.
@@ -606,6 +618,132 @@ def humanise(
     chord_tick: int | None = None   # original tick of the current chord's anchor solo hit (any track)
     chord_anchor_abs = 0            # that anchor's ACTUAL emitted tick; coupled members land near it
 
+    # ---- time-windowed coupling clusters (phi > 0 only; COUPLE_WINDOW_MS) ----
+    # Purely additive generalisation of same-tick coupling: consecutive shiftable
+    # hits within the window of the cluster's FIRST hit form one cluster. Only
+    # clusters with a nonzero internal span take the new rigid-unit path below —
+    # same-tick chords keep the existing anchor+residual behaviour byte-for-byte
+    # and singletons stay solo hits. phi == 0 disables coupling entirely, as ever.
+    cluster_of: dict[tuple[int, int], dict] = {}
+    cluster_samples: dict[tuple[int, int], tuple[float, float]] = {}
+    if groove is not None:
+        def _close_cluster(run: list[tuple[int, int, int, int]]) -> None:
+            if len(run) < 2 or run[-1][0] == run[0][0]:
+                return                       # singleton or zero-gap: existing paths
+            members = [(a, t, i) for a, t, i, _pos in run]
+            # loudest member sources the timing sample — the main stroke leads,
+            # the grace note follows. Ties: max() keeps the earliest in order.
+            loudest = max(members,
+                          key=lambda m: tracks_abs[m[1]][m[2]][1].velocity)
+            min_eff = (min(_eff(TD11_TO_GROUP[tracks_abs[t][i][1].note])
+                           for _a, t, i in members)
+                       if intensity_by_group else intensity)
+            cl = {
+                "members": members, "loudest": loudest, "min_eff": min_eff,
+                "mstart": run[0][3], "mend": run[-1][3],
+                "planned": False, "delta": 0,
+            }
+            for _a, t, i in members:
+                cluster_of[(t, i)] = cl
+
+        _run: list[tuple[int, int, int, int]] = []
+        for _pos, (_abs_e, _ti_e, _idx_e) in enumerate(merged):
+            if not tracks_will_shift[_ti_e][_idx_e]:
+                continue
+            if _run and ticks_to_ms_with_map(
+                    _run[0][0], _abs_e, tempo_map, ppq) <= COUPLE_WINDOW_MS:
+                _run.append((_abs_e, _ti_e, _idx_e, _pos))
+            else:
+                _close_cluster(_run)
+                _run = [(_abs_e, _ti_e, _idx_e, _pos)]
+        _close_cluster(_run)
+
+    def _plan_cluster(cl: dict, first_member: tuple[int, int],
+                      first_sample: tuple[float, float]) -> None:
+        """Fix a windowed cluster's single shared tick delta, once, at its first
+        member's turn.
+
+        Draws the remaining members' samples eagerly IN MERGED ORDER (members are
+        consecutive shiftable hits, so the global RNG stream is unchanged), steps
+        the kit clock ONCE on the loudest member's sample, then clamps the shared
+        delta at CLUSTER scope: each member's legal interval against its own fixed
+        context (note-offs, fixed events, prior emitted state) is intersected and
+        the one delta clamped into it. Members are never clamped independently —
+        that is what would collapse/distort a flam. Member-vs-member spacing needs
+        no constraint: the shared delta preserves original gaps (>= EPSILON_TICKS).
+        """
+        samples: dict[tuple[int, int], tuple[float, float]] = {first_member: first_sample}
+        for abs_m, ti_m, idx_m in cl["members"]:
+            key_m = (ti_m, idx_m)
+            if key_m == first_member:
+                continue
+            msg_m = tracks_abs[ti_m][idx_m][1]
+            group_m = TD11_TO_GROUP[msg_m.note]
+            grid_m = quantise_to_grid(abs_m, ppq, grid)
+            gp_m = grid_position_in_bar(grid_m, ppq) if use_grid_pos else None
+            bucket_m, _lvl_m, _key_used_m = _lookup(
+                profiles, genre, beat_type, group_m, msg_m.velocity,
+                grid_pos=gp_m, thresholds=file_thresholds.get(group_m),
+            )
+            pair = _sample_bucket(bucket_m)
+            samples[key_m] = pair
+            cluster_samples[key_m] = pair
+
+        abs_l, ti_l, idx_l = cl["loudest"]
+        msg_l = tracks_abs[ti_l][idx_l][1]
+        group_l = TD11_TO_GROUP[msg_l.note]
+        grid_l = quantise_to_grid(abs_l, ppq, grid)
+        gp_l = grid_position_in_bar(grid_l, ppq) if use_grid_pos else None
+        bucket_l, _lvl_l, key_l = _lookup(
+            profiles, genre, beat_type, group_l, msg_l.velocity,
+            grid_pos=gp_l, thresholds=file_thresholds.get(group_l),
+        )
+        offset_raw_l = samples[(ti_l, idx_l)][0]
+        mu_center_l = float(bucket_l.offsets.mean())
+        fluct = groove.step(offset_raw_l - mu_center_l, float(bucket_l.offsets.std()))
+        mu_debias_l = profiles.bucket_offset_means.get(key_l, 0.0)
+        offset_ms_l = fluct + (mu_center_l - (1.0 - lean) * mu_debias_l)
+        cand_l = grid_l + _ms_offset_to_ticks(
+            grid_l, offset_ms_l * cl["min_eff"], tempo_map, ppq
+        )
+        desired = cand_l - abs_l
+
+        member_set = {(t, i) for _a, t, i in cl["members"]}
+        sim_pe: dict[int, int] = {}
+        sim_pn: dict[int, float] = {}
+        sim_pno: dict[int, float] = {}
+        d_lo, d_hi = -math.inf, math.inf
+        for pos in range(cl["mstart"], cl["mend"] + 1):
+            abs_e, ti_e, idx_e = merged[pos]
+            if (ti_e, idx_e) in member_set:
+                pe = sim_pe.get(ti_e, prev_emitted_abs[ti_e])
+                pn = sim_pn.get(ti_e, prev_note_on_abs[ti_e])
+                pno = sim_pno.get(ti_e, prev_note_on_orig_abs[ti_e])
+                lower = pe if abs_e == pno else max(pe, pn + EPSILON_TICKS)
+                upper_ex = min(
+                    tracks_paired_off[ti_e][idx_e],
+                    tracks_next_fixed[ti_e][idx_e + 1]
+                    if idx_e + 1 < len(tracks_abs[ti_e]) else math.inf,
+                )
+                d_lo = max(d_lo, lower - abs_e)
+                d_hi = min(d_hi, (upper_ex - 1) - abs_e)
+                sim_pno[ti_e] = abs_e
+            elif not tracks_will_shift[ti_e][idx_e]:
+                # fixed event between members: replay exactly what the real loop
+                # will do to this track's window state before the member's turn
+                msg_e = tracks_abs[ti_e][idx_e][1]
+                sim_pe[ti_e] = abs_e
+                if msg_e.type == "note_on" and msg_e.velocity > 0:
+                    sim_pn[ti_e] = abs_e
+                    sim_pno[ti_e] = abs_e
+
+        if d_lo > d_hi:
+            delta = 0        # no interval satisfies every member: hold as written
+        else:
+            delta = int(max(d_lo, min(float(desired), d_hi)))
+        cl["delta"] = delta
+        cl["planned"] = True
+
     for abs_t, ti, idx in merged:
         msg = tracks_abs[ti][idx][1]
         if tracks_will_shift[ti][idx]:
@@ -617,7 +755,12 @@ def humanise(
                 profiles, genre, beat_type, group, msg.velocity, grid_pos=grid_pos,
                 thresholds=file_thresholds.get(group),
             )
-            offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
+            stashed = cluster_samples.pop((ti, idx), None)
+            if stashed is not None:
+                # drawn eagerly (in stream order) when this hit's cluster was planned
+                offset_ms_raw, vel_delta_raw = stashed
+            else:
+                offset_ms_raw, vel_delta_raw = _sample_bucket(bucket)
 
             if velocity_only:
                 new_vel = _new_velocity(group, bucket, vel_delta_raw, msg.velocity)
@@ -627,6 +770,30 @@ def humanise(
                 prev_emitted_abs[ti] = abs_t
                 if verbose:
                     print(f"  note {msg.note} ({group}): level {level}")
+                continue
+
+            cl = cluster_of.get((ti, idx))
+            if cl is not None:
+                # windowed (gap > 0) cluster member: one rigid shared delta for
+                # the whole cluster, fixed at the first member's turn. No
+                # per-member residual and no per-member clamping. Velocity is
+                # still per-hit (same samples, same vel-clock order as ever).
+                if not cl["planned"]:
+                    _plan_cluster(cl, (ti, idx), (offset_ms_raw, vel_delta_raw))
+                if timing_only:
+                    new_vel = msg.velocity
+                else:
+                    new_vel = _new_velocity(group, bucket, vel_delta_raw, msg.velocity)
+                # cluster-scope clamp already guarantees legality; the max() is a
+                # defensive guard that must never fire
+                new_abs = int(max(abs_t + cl["delta"], prev_emitted_abs[ti]))
+                out_abs[ti].append((new_abs, msg.copy(velocity=new_vel)))
+                prev_note_on_abs[ti] = new_abs
+                prev_note_on_orig_abs[ti] = abs_t
+                prev_emitted_abs[ti] = new_abs
+                chord_tick = None   # a windowed cluster supersedes same-tick coupling
+                if verbose:
+                    print(f"  note {msg.note} ({group}): level {level} [cluster]")
                 continue
 
             mu_debias = profiles.bucket_offset_means.get(key_used, 0.0)
