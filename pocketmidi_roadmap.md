@@ -1,102 +1,59 @@
 # pocketmidi — plan & decisions
 
-_Last updated: 2026-07-02. Working doc: locked decisions, parked backlog, and the build roadmap. Update it as things move._
+_Last updated: 2026-07-03. Working doc: shipped state, parked backlog, and decisions. Update it as things move._
 
 ## Status at a glance
-- **Step 1 — engine fixes:** ✓ done (2 commits, 186 tests, Codex-reviewed clean).
-- **Step 2 — ear test:** ✓ done → confounded; tempo-aware phi parked.
-- **Step 3 — rebuild design:** ✓ done → `pocketmidi_rebuild_spec.md` v2, Codex design-reviewed.
-- **Step 4 — build (harness → rebuild → re-measure):** ← next.
+- **Step 1 — engine fixes:** ✓ shipped.
+- **Step 2 — ear test:** ✓ done (confounded → led to the 0.35 default).
+- **Step 3 — rebuild design:** ✓ done (`pocketmidi_rebuild_spec.md` v2 + addendum, both Codex-reviewed).
+- **Step 4 — velocity rebuild (module 13):** ✓ **SHIPPED.** Live in the bundled `rock.json`, CLI serves it by default.
+- **Next:** nothing required. Optional rounds parked below. Recommended move: use the tool on real tracks and let that pick the next round.
 
 ---
 
-## Locked decisions
+## What shipped (module 13 + defaults)
 
-- **Paradigm: KEEP.** Statistical delta sampling + AR(1) groove drift is the right frame and the product's reason to exist (weights-free, dependency-light, note-preserving, interpretable knobs). A learned / GrooVAE-style rewrite was evaluated and rejected — it would be a solo-maintained clone competing with Magenta Studio on its own turf. Improvements are extensions *within* this paradigm.
-- **Target genres: rock + pop now.** Funk / jazz / metal are explicit *later* scope, not current weaknesses. Swing genres are the paradigm's real boundary (see revisit triggers).
-- **phi default 0.5 → 0.4.** Shipped in Step 1. Fast-tempo ear test came back confounded (velocity + timing spread dominate, not phi) → tempo-aware phi parked, re-test post-rebuild.
-- **Module 13 (velocity rebuild).** Redefine `vel_delta` at build time as a residual against the `(take, grid-position, instrument)` mean (not the bucket median) — stops sampling accents as noise, roughly halves applied velocity spread. Guardrails: de-bias every emitted bucket to ~0 mean; shrink sparse cells. AR(1) is **kick-only** (kick autocorr +0.32; snare/hat/ride ~white → i.i.d.). Relative (user-percentile) velocity tiering. Static per-song feel-offset (B3) **removed and parked** — double-counts with phi=0.4. Full detail in `pocketmidi_rebuild_spec.md` (v2). NOT "AR on all velocities."
-- **Cross-instrument timing: no new mechanism.** Adjacent cross-instrument correlation ≈ same-instrument, so one shared kit clock is correct — handled by the Step-1 kit-wide clock.
-- **One batched profile rebuild** against one agreed schema spec — not two (per CLAUDE.md's "batch breaking profile changes").
-- **Delivery shell is open** (CLI now, maybe GUI/plugin later). Keep the core light and embeddable regardless.
+- **Velocity rebuild.** `vel_delta` is now the residual against its shrunk `(take, position, instrument[, tier])` mean (was: delta vs bucket median) — stops sampling accents as noise. Every emitted bucket de-biased to ~0 (verified in shipped artifact, max residual mean 3.4e-15). Snare tier-conditioned (ghost/backbeat get separate baselines). Kick-only velocity AR(1). Relative (user-percentile) velocity tiering. Shipped `rock.json` rebuilt from full GMD (341 rock takes / 114,890 hits), schema_version 2, with a regression test so an old-schema profile can't ship silently.
+- **Default intensity 1.0 → 0.35.** Ear-tested: 0.3–0.35 sounds real, 1.0 sounds sloppy (it faithfully reproduces GMD's raw ~27 ms within-take spread, which is authentic but too loose as a default). Range uncapped; docs steer to 0.2–0.5 as the useful band.
+- **Result:** confirmed better than the old profile by ear on both a busy ghost/backbeat pattern and a four-on-the-floor, never worse; the old profile's accent-inversion (soft hats slamming to 127) is gone.
+- **Key commits:** `c6562a2` (shipped profile), `d7cf0b6` (0.35 default), `e704f09` (eartest generator + both patterns).
 
----
-
-## Measured facts (from the GMD pass — don't re-derive these)
-
-- Within-take timing σ 26–28 ms vs 29–31 ms total → between-take is only ~17%. Drummers genuinely play that loose against the grid. "Sloppy at intensity 1.0" is **taste, not a variance bug** — fix via default/presets.
-- Take tightness varies ~2× (σ 17 ms at P10 vs 37 ms at P90) → a curated "tight" profile from the tighter half of takes is cheap and viable.
-- Static per-take lean: std 11 ms across takes. ~Half the pooled slot correlation (r=0.318) is this static lean; true within-take wander r=0.179 → phi ≈ 0.21. (This is why B3 + phi 0.4 double-counts — see parked backlog.)
-- Velocity lag-1 autocorr (within take, fixed position): kick +0.32, snare +0.15, hats +0.07, ride +0.09. Hats' scatter is **excessive magnitude, not missing correlation** — conditioning on `(take, position)` drops velocity σ from 30–39 to 15–21.
-- Coupling is tighter than humans: same-slot GMD r=0.5–0.78 (kick+snare loosest 0.54, kick+crash tightest 0.78), σ≈15–20 ms. Current ±1 ms coupled residual is 10–20× tighter — a defensible taste call for produced music, worth an A/B (~5 ms) later.
-- phi calibration: recommended ~0.374 overall; tempo split ~0.35–0.45 below 130 BPM, **0.09 above 130 BPM** (fast rock is nearly hit-to-hit independent).
+**Prior shipped work (Step 1):** kit-wide groove clock (fixed multi-track flams), drum-channel filter, straight non-4/4 support, phi default 0.4, docs — commits `5755df6` + `fa4a767`, Codex-reviewed.
 
 ---
 
-## Work status — bugs & fixes
+## Measured facts (from the GMD pass — don't re-derive)
 
-**Done (Step 1 — commits `5755df6` + `fa4a767`, Codex-reviewed clean):**
-- Per-track groove clock flam → kit-wide clock (multi-track same-tick gap 73 ms → ≤1 tick).
-- Drum-channel filter (default channel 10, `--all-channels` opt-out) — melodic parts no longer corrupted.
-- Straight non-4/4 (incl. 3/4) accepted via `grid_pos=None`; 6/8-mixed still raises.
-- phi default → 0.4; README / AGENTS / CLAUDE.md synced.
-
-**Folded into the Step-3 spec (v2):**
-- Velocity de-bias (A2 bucket-level guardrail).
-- Relative velocity tiering (fixes the GMD-absolute tier-collapse).
-
-**Queued — release polish (later):**
-- Intensity default (→ 0.4 or presets), `--report` diagnostics, `pandas` → optional extra, profile rounding (~10 MB → ~5 MB), pyproject license/classifiers/URLs, CI version matrix.
+- Within-take timing σ 26–28 ms vs 29–31 total (between-take only ~17%). Drummers genuinely play that loose vs grid → "sloppy at 1.0" is taste, handled by the 0.35 default.
+- Static per-take lean std 11 ms; true within-take wander r≈0.179 → phi≈0.21. (Why B3+phi 0.4 double-counts — see parked.)
+- Velocity lag-1 autocorr: kick +0.32, snare +0.15, hats +0.07, ride +0.09 → AR is kick-only.
+- Coupling tighter than humans: GMD same-slot r=0.5–0.78, σ≈15–20 ms; current ±1 ms is 10–20× tighter (taste call).
+- phi calibration ~0.374 overall; ~0.35–0.45 below 130 BPM, 0.09 above 130 BPM.
 
 ---
 
-## Parked backlog (write-down, don't touch now)
+## Open items carried forward (measured, parked — none blocking)
 
-- **Validation harness** — promoted to a build step (Step 4). Listed here as the anchor for everything stochastic.
-- Ear test done (2026-07-02) → **confounded**: both fast-tempo versions sounded bad because velocity + timing spread dominate, not phi. Tempo-aware phi stays parked; re-test after the velocity rebuild on freshly generated files.
-- **B3 (static per-song feel-offset) + phi recalibration — paired decision, parked.** Extracting the take lean (σ≈11 ms) implies phi≈0.21, so B3 can't be added while phi stays 0.4 without double-counting. Revisit both together after the rebuild, gated on a clean ear test. Removed from the Step-3 rebuild.
-- Tight-curated profile variant.
+1. **Within-role velocity over-noise** — at full intensity, kick/hats/ride put 2–3× human spread within a fixed role (snare fixed). It's *unimodal* excess (not ghost/accent structure — bimodality is 1–3% vs snare's 10%), so tier-conditioning won't fix it; likely slow dynamic movement (crescendos/section swells) sampled as white per-hit noise. **The 0.35 default masks it in practice.** The measured next lever if you want higher intensities to hold up — would need a new correlation/conditioning mechanism (the velocity analogue of the AR timing clock). Ear verdict on it: minor.
+2. **Snare zero-jump mass** marginally under the gate — human ghost-runs repeat near-identical velocities; continuous KDE residuals rarely produce exact repeats. Structural to the paradigm, not a snare bug. Cosmetic.
+3. **Doc sync** — CLAUDE.md's implementation notes don't yet record module 13 / the 0.35 default. (Roadmap now updated; CLAUDE.md pending.)
+
+### Other parked backlog (unchanged)
+- **B3 (static per-song feel-offset) + phi recalibration** — paired decision; extracting the lean implies phi≈0.21, can't add B3 while phi stays 0.4 without double-counting. Revisit together, gated on a clean ear test.
+- Presets (subtle/natural/loose) — if the single 0.35 default isn't enough UX.
+- Tight-curated profile variant (build from the tighter half of GMD takes).
 - Coupled-residual A/B (±1 ms vs ~5 ms).
-- **Preserve-intent architecture** — add human residual *on top of* the user's input instead of flatten-to-grid-then-regenerate. Answers both the drums-in-isolation and iterative-use problems. Cheap first step: warn on / don't silently flatten off-grid input.
-- Feed-the-song / groove-transfer ("play like this recording") — out of scope; it's revisit-trigger territory, not a knob.
-- Known ceiling: humanising toward the *average* GMD drummer kills robotic but caps at "convincingly generic," not "distinctive feel." Fine for rock/pop backing.
+- **Preserve-intent architecture** — add residual on top of user input instead of flatten-then-regenerate; fixes iterative-use (re-humanising destroys the prior pass) and the drums-in-isolation framing. Cheap first step: warn on / don't silently flatten off-grid input.
+- **PyPI release-polish batch** (separate goal — "publish it", not "improve it"): pyproject license/classifiers/URLs, `pandas` → optional extra, profile rounding (~10→5 MB), CI version matrix, `--report` diagnostics.
+- Known ceilings (inherent, not bugs): humanises toward the *average* GMD drummer → "convincingly generic," not distinctive; drums-in-isolation can't do mix/song awareness. Sample library is out of scope (user's kit choice).
 
-### Revisit triggers for a learned approach (none close today; watch #3)
-1. Swing genres (jazz/funk) come in-scope — per-slot stats can't represent phrase-dependent swing.
-2. A small, permissive, embeddable open drum-humanisation model (GrooVAE-class, <50 MB, ONNX) appears to *call* rather than reimplement.
-3. **The rebuild is built and A/B listening still says "programmed."** ← the empirical ceiling test (the harness is the objective form of this).
-4. Users want "play like drummer X from this recording" (an embedding feature).
+### Revisit triggers for a learned approach (none close today)
+1. Swing genres (jazz/funk) come in-scope. 2. A small embeddable open drum-humanisation model appears to *call* not reimplement. 3. Improvements built and A/B still says "programmed" (empirical ceiling). 4. "Play like drummer X from this recording."
 
 ---
 
-## Roadmap
+## Execution playbook (for future rounds)
 
-**Step 1 — Safe engine fixes.** ✓ DONE. Channel filter, straight non-4/4, kit-wide clock, phi 0.4, docs. 186 tests green, Codex-reviewed clean.
-
-**Step 2 — Ear test.** ✓ DONE → confounded (both fast versions bad; velocity + spread dominate, not phi). Tempo-aware phi parked, re-test post-rebuild.
-
-**Step 3 — Rebuild design (spec + harness design).** ✓ DONE. `pocketmidi_rebuild_spec.md` v2, Codex design-reviewed — B3 dropped, kick-only locked, velocity guardrails added, harness gains contour-preservation metrics + multi-seed CIs + a clean train-split baseline.
-
-**Step 4 — Build (next).** In spec order, stopping for review at each checkpoint:
-1. Validation harness + baselines (quantised input, clean train-split old-schema profile = the gate, shipped-current = context).
-2. Batched profile rebuild + runtime changes (velocity residual + de-bias + shrinkage, kick-only AR, relative tiering).
-3. Re-measure against the acceptance gate — accept only if closer to human than both baselines on velocity fine-structure **and** contour preservation, with timing metrics unmoved.
-
----
-
-## Execution playbook (which tool, which settings, when to review)
-
-**Model:** Claude Fable 5 in Claude Code, fresh session per step (not the audit session). Mode: **ask before edits** (approve setup/test commands, decline stray edits). Thinking on. Step 4 needs GMD present locally.
-
-**Effort per run:**
-- **xhigh** — anything that runs code or is a real implementation/refactor: Step 1 (done), the Step 4 harness + rebuild.
-- **high** — pure reasoning/design with no execution.
-- Not max — overthinks structured work and burns usage fast. Drop to high if you hit limits.
-
-**Review gates:**
-- Step 1 code → Codex-reviewed, clean. ✓
-- Step 3 spec → Codex design-reviewed before building; findings folded into v2. ✓ (the highest-value review in the plan.)
-- Step 4 build → normal review after each of the three checkpoints; a fresh Claude or Codex is fine.
-- **Do NOT re-review settled reviews** (the audit, or the applied Codex spec review) — that's the loop that never ends.
-
-**Rule of thumb:** cross-model review before *irreversible* decisions (the rebuild spec ✓); single-model review after *reversible* code (the commits).
+**Model:** Claude Fable 5 in Claude Code, fresh session per step. Mode: **ask before edits**. Thinking on. Rebuild/harness steps need GMD present.
+**Effort:** xhigh for code/execution/refactor; high for pure design.
+**Review gates that worked this project:** cross-review the *design/spec* with Codex before building (the expensive, hard-to-reverse fork); single-model review of *code diffs* after writing; validate *harness/measurement tools* by watching them behave, not by review; and **listen before shipping any profile as default** — the metrics ranked module 13 a pass, the ear caught that the default intensity still sounded jagged. Don't re-review settled reviews.
