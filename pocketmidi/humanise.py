@@ -528,6 +528,7 @@ def humanise(
     tracks_will_shift: list[list[bool]] = []
     tracks_next_fixed: list[list[float]] = []
     tracks_paired_off: list[list[float]] = []
+    tracks_paired_off_idx: list[list[int | None]] = []
 
     for track in mid.tracks:
         # Pass 1a — collect abs ticks (per-track, reset to 0)
@@ -574,8 +575,11 @@ def humanise(
             next_fixed[i] = last_fixed
 
         # paired_note_off_abs[i]: FIFO-paired note_off abs_tick for each note_on
+        # paired_note_off_idx[i]: that off's message index (windowed coupling
+        # needs the identity, not just the tick, to make member offs elastic)
         open_note_ons: dict = defaultdict(deque)
         paired_note_off_abs = [math.inf] * N
+        paired_note_off_idx: list[int | None] = [None] * N
 
         for i, (abs_t, msg) in enumerate(abs_messages):
             if msg.type == "note_on" and msg.velocity > 0:
@@ -585,11 +589,13 @@ def humanise(
                 if open_note_ons[key]:
                     note_on_idx = open_note_ons[key].popleft()
                     paired_note_off_abs[note_on_idx] = abs_t
+                    paired_note_off_idx[note_on_idx] = i
 
         tracks_abs.append(abs_messages)
         tracks_will_shift.append(will_shift)
         tracks_next_fixed.append(next_fixed)
         tracks_paired_off.append(paired_note_off_abs)
+        tracks_paired_off_idx.append(paired_note_off_idx)
 
     # ---- Pass 2 (global): one absolute-time-ordered stream across all tracks ----
     # The groove clock and chord coupling are KIT-WIDE state. Multi-track drum MIDI
@@ -626,6 +632,7 @@ def humanise(
     # and singletons stay solo hits. phi == 0 disables coupling entirely, as ever.
     cluster_of: dict[tuple[int, int], dict] = {}
     cluster_samples: dict[tuple[int, int], tuple[float, float]] = {}
+    elastic_offs: set[tuple[int, int]] = set()   # rigid-cluster member note_offs
     if groove is not None:
         def _close_cluster(run: list[tuple[int, int, int, int]]) -> None:
             if len(run) < 2 or run[-1][0] == run[0][0]:
@@ -709,10 +716,32 @@ def humanise(
         desired = cand_l - abs_l
 
         member_set = {(t, i) for _a, t, i in cl["members"]}
+        # Members' paired note_offs are ELASTIC: they ride behind their shifted
+        # note_on (sliding forward only when the on would otherwise pass them),
+        # so a member's OWN duration NEVER bounds the shared delta — a 1-tick
+        # hat is a normal drum note, not a timing wall. Walls are genuinely
+        # fixed events only: other lanes' offs, melodic notes, metas.
+        member_offs: set[tuple[int, int]] = set()
+        for _a, t, i in cl["members"]:
+            off_i = tracks_paired_off_idx[t][i]
+            if off_i is not None:
+                member_offs.add((t, off_i))
+
+        def _next_wall(ti_w: int, start_idx: int) -> float:
+            """First genuinely-fixed tick at/after start_idx on this track —
+            skips shiftable hits (they window themselves) and this cluster's
+            elastic member offs (they slide)."""
+            msgs_w = tracks_abs[ti_w]
+            for j in range(start_idx, len(msgs_w)):
+                if tracks_will_shift[ti_w][j] or (ti_w, j) in member_offs:
+                    continue
+                return msgs_w[j][0]
+            return math.inf
+
         sim_pe: dict[int, int] = {}
         sim_pn: dict[int, float] = {}
         sim_pno: dict[int, float] = {}
-        d_lo, d_hi = -math.inf, math.inf     # musical interval (EPSILON, ceiling-1)
+        d_lo, d_hi = -math.inf, math.inf     # musical interval (EPSILON, wall-1)
         h_lo, h_hi = -math.inf, math.inf     # HARD encodability interval (delta>=0 in pass 3)
         for pos in range(cl["mstart"], cl["mend"] + 1):
             abs_e, ti_e, idx_e = merged[pos]
@@ -721,24 +750,33 @@ def humanise(
                 pn = sim_pn.get(ti_e, prev_note_on_abs[ti_e])
                 pno = sim_pno.get(ti_e, prev_note_on_orig_abs[ti_e])
                 lower = pe if abs_e == pno else max(pe, pn + EPSILON_TICKS)
-                upper_ex = min(
-                    tracks_paired_off[ti_e][idx_e],
-                    tracks_next_fixed[ti_e][idx_e + 1]
-                    if idx_e + 1 < len(tracks_abs[ti_e]) else math.inf,
-                )
+                wall = _next_wall(ti_e, idx_e + 1)
                 d_lo = max(d_lo, lower - abs_e)
-                d_hi = min(d_hi, (upper_ex - 1) - abs_e)
+                d_hi = min(d_hi, (wall - 1) - abs_e)
                 h_lo = max(h_lo, pe - abs_e)
-                h_hi = min(h_hi, upper_ex - abs_e)
+                h_hi = min(h_hi, wall - abs_e)
                 sim_pno[ti_e] = abs_e
             elif not tracks_will_shift[ti_e][idx_e]:
-                # fixed event between members: replay exactly what the real loop
-                # will do to this track's window state before the member's turn
+                # fixed event between members (an elastic off simulates at its
+                # written tick — it can only end up later, and rigidity keeps
+                # any follower legal): replay the real loop's window state
                 msg_e = tracks_abs[ti_e][idx_e][1]
                 sim_pe[ti_e] = abs_e
                 if msg_e.type == "note_on" and msg_e.velocity > 0:
                     sim_pn[ti_e] = abs_e
                     sim_pno[ti_e] = abs_e
+
+        # Off-side bounds: an elastic off is dragged at most to (last member on
+        # before it) + delta, and must not pass ITS next wall. Bounded via that
+        # driver on, not the note's own length.
+        for t_off, i_off in member_offs:
+            wall_off = _next_wall(t_off, i_off + 1)
+            if wall_off == math.inf:
+                continue
+            a_star = max(a for a, t, i in cl["members"]
+                         if t == t_off and i < i_off)
+            d_hi = min(d_hi, (wall_off - 1) - a_star)
+            h_hi = min(h_hi, wall_off - a_star)
 
         if d_lo <= d_hi:
             delta = int(max(d_lo, min(float(desired), d_hi)))
@@ -749,18 +787,23 @@ def humanise(
             # as far as hard encodability demands (a prior hit may already have
             # emitted past a member's written tick — a negative MIDI delta is a
             # crash, so pure delta 0 is not always available). The EPSILON
-            # separation and ceiling-1 preferences are sacrificed here: a held
-            # flam is acceptable, a smeared one is not.
+            # separation and wall-1 preferences are sacrificed here: a held
+            # flam is acceptable, a smeared one is not. With elastic offs, note
+            # durations cannot empty the hard interval — only a late prior hit
+            # combined with a genuinely fixed foreign wall inside the window can.
             delta = int(max(0.0, h_lo))
             rigid = delta <= h_hi
             if not rigid:
-                # Truly unsatisfiable (zero-length notes + a late prior hit):
-                # no shared delta is even encodable. Degrade to the legacy
-                # per-member windowing below — crash-free, smear accepted,
-                # pathological input only.
+                # Doubly-pathological corner (a prior hit emitted past a member
+                # AND a foreign fixed wall immediately after another member): no
+                # shared delta is encodable at all, rigid or not. Degrade to the
+                # legacy per-member windowing below — crash-free, smear accepted.
                 delta = 0
         cl["delta"] = delta
         cl["rigid"] = rigid
+        if rigid:
+            # member offs ride with their ons from here on (emit loop)
+            elastic_offs.update(member_offs)
         cl["planned"] = True
 
     for abs_t, ti, idx in merged:
@@ -917,6 +960,14 @@ def humanise(
             if verbose:
                 print(f"  note {msg.note} ({group}): level {level}")
 
+        elif (ti, idx) in elastic_offs:
+            # elastic member note_off: rides behind its rigid-cluster note_on,
+            # sliding forward only if the shifted on has reached/passed it —
+            # never backward. This is what frees the cluster's shared delta
+            # from each member's own duration.
+            new_abs = max(abs_t, prev_emitted_abs[ti])
+            out_abs[ti].append((new_abs, msg))
+            prev_emitted_abs[ti] = new_abs
         else:
             out_abs[ti].append((abs_t, msg))
             if msg.type == "note_on" and msg.velocity > 0:

@@ -572,3 +572,18 @@ rigid unit instead of scattering. Safety, not drama — subtle or nothing.
 - Ride-alongs in the same commit: `intensity_by_group` finite-value guard (nan passed a
   bare `v < 0`), 3-lane MIN-eff lock, pre-round-3 fixture regression replacing the
   self-comparing push-endpoint test, −1 MIRROR locked on the phi==0 bypass too.
+
+**P1 follow-up (elastic member offs):** a member's OWN note length must never bound the
+shared delta — a 1-tick hat is a normal drum note, not a timing wall (Codex repro: h_hi=1
+from the hat's length vs h_lo=4 from a late prior kick → per-member fallback → 10→6
+smear). Rigid-cluster member note_offs are now ELASTIC: emitted at
+`max(written, prev_emitted)`, i.e. they ride behind their shifted on (sliding forward
+only when the on would otherwise pass them — may truncate a 1-tick note to 0 length in
+the squeezed hold case; inaudible at any real PPQ). Both planner intervals use real
+WALLS only (`_next_wall`: first event that is neither shiftable nor a member off);
+off-side slide is bounded via its driver on (`wall(off) − last member-on before it`),
+never via the note's duration. The per-member fallback now needs a late prior hit AND a
+foreign fixed wall inside the window simultaneously (no shared delta is encodable at
+all in that corner — rigid or not — so it cannot be removed without trading smear for a
+crash); it is unreachable from note durations alone. Solo hits keep their own-off
+ceiling (unchanged semantics outside clusters).

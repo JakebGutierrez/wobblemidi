@@ -2614,23 +2614,42 @@ class TestWindowedCoupling:
         assert snare2 - (base + 13) == 27    # snare solo → grid + 40 → +27 from origin
         assert snare2 - kick2 != 13          # spacing NOT rigidly preserved
 
+    def _offs(self, path, note):
+        out = []
+        for tr in mido.MidiFile(str(path)).tracks:
+            t = 0
+            for msg in tr:
+                t += msg.time
+                is_off = msg.type == "note_off" or (
+                    msg.type == "note_on" and msg.velocity == 0)
+                if is_off and getattr(msg, "note", None) == note:
+                    out.append(t)
+        return out
+
     def test_cluster_clamp_is_cluster_scoped(self, tmp_path):
-        """A member pinned by its own note_off constrains the WHOLE cluster's
-        shared delta — flam spacing survives; nobody is clamped independently."""
+        """A member pinned by a GENUINELY FIXED wall (a foreign channel-0 note —
+        not shiftable, not a member off) constrains the WHOLE cluster's shared
+        delta — flam spacing survives; nobody is clamped independently.
+
+        (A member's OWN note_off is deliberately NOT a wall: member offs are
+        elastic and ride with their ons — see the short-note tests below.)
+        """
         base = 4 * self.PPQ
         prof = self._prof({"kick": 40.0, "snare": 40.0})
-        # kick (loudest) wants +38 ticks; snare's own note_off at +15 caps the
-        # snare's delta at 14 → the CLUSTER moves 14, spacing stays 5.
+        # kick (loudest) wants +38 ticks; a fixed ch-0 note at +20 caps the
+        # snare's musical ceiling at +19 → the CLUSTER moves 14, spacing stays 5.
         mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
         tr = mido.MidiTrack(); mid.tracks.append(tr)
         tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
         events = [
-            (base, "note_on", 36, 120), (base + 5, "note_on", 38, 90),
-            (base + 5 + 15, "note_off", 38, 0), (base + 300, "note_off", 36, 0),
+            (base, "note_on", 36, 120, 9), (base + 5, "note_on", 38, 90, 9),
+            (base + 20, "note_on", 60, 80, 0),
+            (base + 300, "note_off", 36, 0, 9), (base + 305, "note_off", 38, 0, 9),
+            (base + 320, "note_off", 60, 0, 0),
         ]
         prev = 0
-        for t, kind, n, v in events:
-            tr.append(mido.Message(kind, channel=9, note=n, velocity=v, time=t - prev))
+        for t, kind, n, v, ch in events:
+            tr.append(mido.Message(kind, channel=ch, note=n, velocity=v, time=t - prev))
             prev = t
         tr.append(mido.MetaMessage("end_of_track", time=0))
         inp = tmp_path / "clamp.mid"
@@ -2642,7 +2661,76 @@ class TestWindowedCoupling:
         assert kick - base == 14, f"cluster not clamped as a unit (kick delta {kick - base})"
         assert snare - (base + 5) == 14
         assert snare - kick == 5             # flam spacing survives the clamp
-        assert snare == base + 5 + 14        # snare sits at its ceiling (off - 1)
+        assert snare == base + 20 - 1        # snare sits at the wall - 1
+
+    def test_short_note_member_cannot_wall_the_cluster(self, tmp_path):
+        """Codex P1 repro: PPQ 480, 120 BPM, kick 1920–1955, snare 1950–2050,
+        hat 1960–1961 (1 tick — a NORMAL drum note), all buckets +40 ms, phi 0.5.
+
+        Pre-fix: h_lo=4 (kick lands 1954, past the snare's written 1950) and
+        h_hi=1 from the hat's own 1-tick LENGTH → hard interval "empty" → the
+        per-member fallback smeared snare/hat spacing 10 → 6. A member's own
+        duration must never wall the shared delta: its note_off is elastic and
+        rides with its on. Expected: uniform +4 nudge, spacing 10.
+        """
+        prof = self._prof({"kick": 40.0, "snare": 40.0, "hihat_closed": 40.0})
+        mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+        tr = mido.MidiTrack(); mid.tracks.append(tr)
+        tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+        events = [
+            (1920, "note_on", 36, 100), (1950, "note_on", 38, 90),
+            (1955, "note_off", 36, 0),  (1960, "note_on", 42, 60),
+            (1961, "note_off", 42, 0),  (2050, "note_off", 38, 0),
+        ]
+        prev = 0
+        for t, kind, n, v in events:
+            tr.append(mido.Message(kind, channel=9, note=n, velocity=v, time=t - prev))
+            prev = t
+        tr.append(mido.MetaMessage("end_of_track", time=0))
+        inp = tmp_path / "codex_repro.mid"
+        mid.save(str(inp))
+
+        out = tmp_path / "out.mid"
+        humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5, push_amount=1.0)
+        kick = self._ons(out, 36)[0]
+        snare = self._ons(out, 38)[0]
+        hat = self._ons(out, 42)[0]
+        assert kick == 1954                        # prior hit clamped by its own off
+        assert hat - snare == 10, f"P1 smear: spacing {hat - snare} (bug gave 6)"
+        assert (snare, hat) == (1954, 1964)        # uniform +4, rigid
+        # the hat's off rode with its on (encodability without walling the cluster)
+        assert self._offs(out, 42)[0] >= hat
+
+    def test_short_member_late_prior_property(self, tmp_path):
+        """Property: short-note member (1–2 ticks) + a late prior hit — internal
+        spacing is ALWAYS preserved, whole cluster nudged uniformly."""
+        for hat_len in (1, 2):
+            prof = self._prof({"kick": 40.0, "snare": 40.0, "hihat_closed": 40.0})
+            mid = mido.MidiFile(type=0, ticks_per_beat=self.PPQ)
+            tr = mido.MidiTrack(); mid.tracks.append(tr)
+            tr.append(mido.MetaMessage("set_tempo", tempo=500_000, time=0))
+            events = sorted([
+                (1920, "note_on", 36, 100), (1950, "note_on", 38, 90),
+                (1955, "note_off", 36, 0),  (1960, "note_on", 42, 60),
+                (1960 + hat_len, "note_off", 42, 0), (2050, "note_off", 38, 0),
+            ], key=lambda e: e[0])
+            prev = 0
+            for t, kind, n, v in events:
+                tr.append(mido.Message(kind, channel=9, note=n, velocity=v,
+                                       time=t - prev))
+                prev = t
+            tr.append(mido.MetaMessage("end_of_track", time=0))
+            inp = tmp_path / f"prop_{hat_len}.mid"
+            mid.save(str(inp))
+
+            out = tmp_path / f"prop_out_{hat_len}.mid"
+            humanise(inp, out, prof, intensity=1.0, seed=1, phi=0.5,
+                     push_amount=1.0)
+            snare = self._ons(out, 38)[0]
+            hat = self._ons(out, 42)[0]
+            assert hat - snare == 10, (
+                f"hat_len={hat_len}: spacing {hat - snare}, expected 10")
+            assert snare - 1950 == hat - 1960      # one uniform delta
 
     def test_empty_intersection_holds_as_unit(self, tmp_path):
         """Empty cluster interval: the flam HOLDS as a unit — never partially
