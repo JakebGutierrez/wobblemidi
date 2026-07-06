@@ -1,13 +1,19 @@
 # wobblemidi — plan & decisions
 
-_Last updated: 2026-07-03. Working doc: shipped state, parked backlog, and decisions. Update it as things move._
+_Last updated: 2026-07-06. Working doc: shipped state, parked backlog, and decisions. Update it as things move._
 
 ## Status at a glance
 - **Step 1 — engine fixes:** ✓ shipped.
 - **Step 2 — ear test:** ✓ done (confounded → led to the 0.35 default).
 - **Step 3 — rebuild design:** ✓ done (`wobblemidi_rebuild_spec.md` v2 + addendum, both Codex-reviewed).
 - **Step 4 — velocity rebuild (module 13):** ✓ **SHIPPED.** Live in the bundled `rock.json`, CLI serves it by default.
-- **Next:** nothing required. Optional rounds parked below. Recommended move: use the tool on real tracks and let that pick the next round.
+- **Porting contract (Fable window Session 3, 2026-07-06):** ✓ shipped — determinism
+  contract (`wobblemidi_determinism.md`), 26 CI-locked golden vectors (`tests/golden/` +
+  `scripts/{make,verify}_golden.py`), streamability map, and
+  `wobblemidi_porting_contract.md` (settled endgame: JUCE/AU offline-clip plugin;
+  this engine = reference implementation; two-tier port gate; velocity-rebuild verdict:
+  ship-as-is).
+- **Next:** nothing required. Optional rounds parked below. Recommended move: use the tool on real tracks and let that pick the next round. When the JUCE port starts, begin from `wobblemidi_porting_contract.md`.
 
 ---
 
@@ -36,7 +42,7 @@ _Last updated: 2026-07-03. Working doc: shipped state, parked backlog, and decis
 
 1. **Within-role velocity over-noise** — at full intensity, kick/hats/ride put 2–3× human spread within a fixed role (snare fixed). It's *unimodal* excess (not ghost/accent structure — bimodality is 1–3% vs snare's 10%), so tier-conditioning won't fix it; likely slow dynamic movement (crescendos/section swells) sampled as white per-hit noise. **The 0.35 default masks it in practice.** The measured next lever if you want higher intensities to hold up — would need a new correlation/conditioning mechanism (the velocity analogue of the AR timing clock). Ear verdict on it: minor.
 2. **Snare zero-jump mass** marginally under the gate — human ghost-runs repeat near-identical velocities; continuous KDE residuals rarely produce exact repeats. Structural to the paradigm, not a snare bug. Cosmetic.
-3. **Doc sync** — CLAUDE.md's implementation notes don't yet record module 13 / the 0.35 default. (Roadmap now updated; CLAUDE.md pending.)
+3. **Doc sync** — ✓ done (CLAUDE.md records module 13 + the 0.35 default since `5b98fc2`; porting docs added 2026-07-06).
 
 ### Other parked backlog (unchanged)
 - **B3 (static per-song feel-offset) + phi recalibration** — paired decision; extracting the lean implies phi≈0.21, can't add B3 while phi stays 0.4 without double-counting. Revisit together, gated on a clean ear test.

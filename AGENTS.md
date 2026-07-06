@@ -9,6 +9,25 @@ modules. Ignore style, formatting, and minor suggestions unless explicitly asked
 CLI tool that humanises programmed drum MIDI using real drummer timing/velocity
 distributions from the Groove MIDI Dataset (Google Magenta, Roland TD-11).
 
+## Porting contract & verification artifacts (2026-07-06) — read before engine work
+
+Settled facts (do not reopen): the endgame is a **JUCE/C++/AU Logic plugin**, SD3-style
+offline whole-clip drag-in/process/drag-out — NOT a realtime MIDI FX; this Python engine
+is the **reference implementation** the port is validated against; **the harness is the
+source of truth**, not prose specs. Full statement + two-tier port correctness
+definition (Tier 2 harness-based is THE gate and sufficient alone; Tier 1 byte-match
+optional): `wobblemidi_porting_contract.md`. Companions: `wobblemidi_determinism.md`
+(seed semantics / three RNG streams / rounding — frozen) and
+`wobblemidi_streamability.md` (offline-clip plugin model confirmed by inventory).
+
+**Golden vectors** (`tests/golden/`, 26 vectors, run in every pytest/CI pass via
+`tests/test_golden_vectors.py`; manual: `python scripts/verify_golden.py`) byte-lock
+engine behaviour. Any change that alters output bytes fails them: fix the regression,
+or — for an INTENTIONAL behaviour change only — regenerate with
+`scripts/make_golden.py --force` in the same commit, through the normal review gate.
+Profile rebuilds additionally gate on `scripts/validate.py` + an ear test before
+touching the bundled `rock.json`.
+
 ## Dev setup
 ```bash
 python3 -m venv .venv
