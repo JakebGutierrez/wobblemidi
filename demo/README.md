@@ -51,3 +51,15 @@ Render settings that matter:
    flam_beat/rock_4bar are 120 BPM), or set the project tempo to match.
 5. Export as MP3 (or M4A) — small enough to commit, and GitHub serves them
    playable in the browser. 256 kbps is plenty.
+
+## GUI capture plan (optional, for the main README)
+
+One short GIF (~15 s, `demo/gui_workflow.gif`), captured at 2× speed:
+
+1. Launch `wobblemidi-gui`, drag `rock_ghosts_input.mid` onto the window.
+2. Hit HUMANISE with defaults; the note display updates.
+3. Nudge INTENSITY up, HUMANISE again; click a lane to show lane-scoped intensity.
+4. Export via the save dialog.
+
+macOS: Cmd+Shift+5 screen recording → convert with
+`ffmpeg -i in.mov -vf "fps=12,scale=880:-1" demo/gui_workflow.gif`.
