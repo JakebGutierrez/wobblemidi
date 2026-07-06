@@ -4,18 +4,44 @@ build-backend = "hatchling.build"
 
 [project]
 name = "wobblemidi"
-version = "0.1.0"
-description = "Humanise programmed drum MIDI using real drummer performance data"
+version = "1.0.0"
+description = "Humanise programmed drum MIDI with timing and velocity distributions learned from real drummers (Groove MIDI Dataset)"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "Jakeb Gutierrez" }]
+keywords = [
+    "midi",
+    "drums",
+    "humanize",
+    "humanise",
+    "groove",
+    "music-production",
+    "groove-midi-dataset",
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: MIDI",
+]
 dependencies = [
     "mido>=1.3",
     "numpy>=1.24",
     "scipy>=1.10",
-    "pandas>=2.0",
     "click>=8.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/JakebGutierrez/wobblemidi"
+Repository = "https://github.com/JakebGutierrez/wobblemidi"
+Issues = "https://github.com/JakebGutierrez/wobblemidi/issues"
 
 [project.scripts]
 wobblemidi = "wobblemidi.cli:main"
@@ -24,6 +50,7 @@ wobblemidi-gui = "wobblemidi_gui.app:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
+    "pandas>=2.0",
 ]
 gui = [
     "pywebview>=6",
@@ -35,4 +62,16 @@ include = [
     "wobblemidi/profiles/*.json",
     "wobblemidi_gui/**/*.py",
     "wobblemidi_gui/web/**",
+]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "wobblemidi/**/*.py",
+    "wobblemidi/profiles/*.json",
+    "wobblemidi_gui/**/*.py",
+    "wobblemidi_gui/web/**",
+    "tests/**",
+    "scripts/*.py",
+    "demo/*.mid",
+    "*.md",
 ]

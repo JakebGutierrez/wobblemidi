@@ -208,7 +208,10 @@ __marimo__/
 
 # wobblemidi
 # Throwaway A/B ear-test samples (regenerate via scripts/make_demo.py).
-# The committed demo/rock_4bar_*.mid reference demos are intentionally kept.
+# The committed demo/*.mid reference demos are intentionally kept.
 demo/eartest/
 # Validation harness artifacts (gate profile, reports) — regenerate via scripts/validate.py
 validation/
+# The GUI .app build spec is checked in (built by scripts/build_app.sh);
+# overrides the generic *.spec ignore above.
+!wobblemidi-gui.spec
