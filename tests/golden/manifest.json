@@ -1,0 +1,537 @@
+{
+ "_meta": {
+  "description": "Golden vectors: fixed-seed input->output pairs locking engine behaviour byte-for-byte. Verify: scripts/verify_golden.py (or pytest tests/test_golden_vectors.py). Regenerate ONLY deliberately: scripts/make_golden.py --force, committed together with the engine/profile change that motivated it. See wobblemidi_determinism.md.",
+  "generated_at_rev": "b723e73",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4",
+  "numpy": "2.5.1",
+  "scipy": "1.18.0",
+  "mido": "1.3.3",
+  "profile": "wobblemidi/profiles/rock.json",
+  "profile_sha256": "6ab0cf5471555bbb819805346eea790d88e14a95ecd73caf7f430cf1ad723bc7",
+  "seed_sensitivity_pairs": [
+   [
+    "f1_default",
+    "f1_seed7"
+   ]
+  ]
+ },
+ "vectors": [
+  {
+   "id": "f1_default",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "3269bfd3f3fd9d21a434a061a3e568902c5dda011566b72a3c2a38ff48b7cb3e"
+  },
+  {
+   "id": "f2_default",
+   "input": "inputs/f2_rock_ghosts.mid",
+   "output": "outputs/f2_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "6b2502b9dd5146f6424d0e00ba49a813e5a31b1d850175742e2948f79ae08824",
+   "sha256_output": "aa81e7dbd62c4e094a323ec84a1509a9037dd8b85c72bc08ff16aa98e9085e3a"
+  },
+  {
+   "id": "f3_default",
+   "input": "inputs/f3_four_floor.mid",
+   "output": "outputs/f3_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "e4cbcb2cc1f6f8e5785a3d46029f7695cd83ad07d11dd2353217f9bf44d3d3fb",
+   "sha256_output": "fc794a3134557e877df7c14c28da19dc2f9b7ffdbbe1e7d9391bd54d814f17ec"
+  },
+  {
+   "id": "f4_default",
+   "input": "inputs/f4_flam_cluster.mid",
+   "output": "outputs/f4_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "1b524102f2f7725881abf75f51e8cc33d193eadf9c26df3bfaf1c4e465551c20",
+   "sha256_output": "f9d103c3e90e5e793885e924a1be26d1f4d4a2e63052cd738ac76038bdc947e0"
+  },
+  {
+   "id": "f5_default",
+   "input": "inputs/f5_sixeight.mid",
+   "output": "outputs/f5_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "906755b7216f3f6572dd05fdc8e9e1d50a094871ad07da34b6496ce1e026e971",
+   "sha256_output": "79a1e0842f3a0d39fbe3727324a1c87605a914b70af7468bb5c5fb4b2c9094d2"
+  },
+  {
+   "id": "f6_default",
+   "input": "inputs/f6_threefour.mid",
+   "output": "outputs/f6_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "91d3650173431c27cfe7c6cded23e3f6781c4024613f7284a9276ffac47e8dae",
+   "sha256_output": "a336115971363237372efdab3ab7ed7e516e74b060629f7d635a630931482b40"
+  },
+  {
+   "id": "f7_default",
+   "input": "inputs/f7_multitrack.mid",
+   "output": "outputs/f7_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "0708c91d43919aee2e41aec3353e2b29c3263abd9bbcb524032903a414b8a37f",
+   "sha256_output": "e7d5af5ca77f8be0f5c4c772692ba831f8f7244da158046b83d681f9783d80d8"
+  },
+  {
+   "id": "f8_default",
+   "input": "inputs/f8_tempomap.mid",
+   "output": "outputs/f8_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "40f732d7ae1bae2c831dc2323769a6481423fcfe3aa3fb783260249e55ffc06c",
+   "sha256_output": "732b586e484f9fa338d805ed8b07a6845e6d5e8e9f1644af066671f7ecf52916"
+  },
+  {
+   "id": "f9_empty_default",
+   "input": "inputs/f9_empty.mid",
+   "output": "outputs/f9_empty_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "ef496ada02152575584d4b29b88b46e30d16cf3d5710a73e4bb0fecce3bc7a42",
+   "sha256_output": "ef496ada02152575584d4b29b88b46e30d16cf3d5710a73e4bb0fecce3bc7a42"
+  },
+  {
+   "id": "f9_single_default",
+   "input": "inputs/f9_single_hit.mid",
+   "output": "outputs/f9_single_default.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "2019c8794915b396f5805cb4ae46a3e59e647219064746918491209b99f55298",
+   "sha256_output": "351be5bb2b1062c7c17756e19027ae41c492fa438c6cd3b11ff244953ac886db"
+  },
+  {
+   "id": "f1_intensity00",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_intensity00.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.0,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78"
+  },
+  {
+   "id": "f1_intensity10",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_intensity10.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 1.0,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "15daf0727abd9ba40be721113d9656fc65ce36aadd48e6dc7383d8140def2d0c"
+  },
+  {
+   "id": "f1_phi00",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_phi00.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.0,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "9745f004315957232a416a76b9d0dad5ad48efa2d33e33f78afb9cc944228632"
+  },
+  {
+   "id": "f1_phi09",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_phi09.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.9,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "ca69a6e6b2a55434f2cdb68a926d106601731daad7ada3b913de0902d567f772"
+  },
+  {
+   "id": "f1_push",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_push.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": true,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "363a4cce9ccc4712d127845a47a1b767ba4c5718914b0998a55ef446f5b0b23b"
+  },
+  {
+   "id": "f1_lean_mirror",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_lean_mirror.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": -1.0,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "0f3c157a551b3ffd909f89636dc6cb026835749527cd7d931be9185828d4f522"
+  },
+  {
+   "id": "f1_lean_half",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_lean_half.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": 0.5,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "46bef2cd2a30f15d8bc090fe5f4f22ffdfee2ec014406ac824d28c82bea3c081"
+  },
+  {
+   "id": "f1_seed7",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_seed7.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 7,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "2a7508fe769926405c39e1199e1441b9ab44621328ec40151c73d8ea1b79b08d"
+  },
+  {
+   "id": "f4_phi00",
+   "input": "inputs/f4_flam_cluster.mid",
+   "output": "outputs/f4_phi00.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.0,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "1b524102f2f7725881abf75f51e8cc33d193eadf9c26df3bfaf1c4e465551c20",
+   "sha256_output": "63fff5eba85329d665dd360ee406c2af82b48beb2b3f88d722ecaa7f48abca05"
+  },
+  {
+   "id": "f4_hats_pinned",
+   "input": "inputs/f4_flam_cluster.mid",
+   "output": "outputs/f4_hats_pinned.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": {
+     "hihat_closed": 0.0
+    }
+   },
+   "sha256_input": "1b524102f2f7725881abf75f51e8cc33d193eadf9c26df3bfaf1c4e465551c20",
+   "sha256_output": "0bc9207887fb618fd7fab014158246247ff9ea8c751bda1a1f5838d932b6548f"
+  },
+  {
+   "id": "f2_timing_only",
+   "input": "inputs/f2_rock_ghosts.mid",
+   "output": "outputs/f2_timing_only.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": true,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "6b2502b9dd5146f6424d0e00ba49a813e5a31b1d850175742e2948f79ae08824",
+   "sha256_output": "d9b4d21ee1da321926759a6d4600cfc4ded72d05441288affef07c1a318e04c6"
+  },
+  {
+   "id": "f2_velocity_only",
+   "input": "inputs/f2_rock_ghosts.mid",
+   "output": "outputs/f2_velocity_only.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": true,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "6b2502b9dd5146f6424d0e00ba49a813e5a31b1d850175742e2948f79ae08824",
+   "sha256_output": "cdf631beda927daecea53fbf5077c93996bdcbc7163bd0c755f71b80f7bb8816"
+  },
+  {
+   "id": "f2_fill",
+   "input": "inputs/f2_rock_ghosts.mid",
+   "output": "outputs/f2_fill.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "fill",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "6b2502b9dd5146f6424d0e00ba49a813e5a31b1d850175742e2948f79ae08824",
+   "sha256_output": "2f91059b32f085c7fc0bee04efeffd9cc516f8eae9c9c54ae7f7ac8c84fd2b82"
+  },
+  {
+   "id": "f7_lanes",
+   "input": "inputs/f7_multitrack.mid",
+   "output": "outputs/f7_lanes.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": false,
+    "push_amount": null,
+    "intensity_by_group": {
+     "snare": 0.0,
+     "hihat_closed": 1.0
+    }
+   },
+   "sha256_input": "0708c91d43919aee2e41aec3353e2b29c3263abd9bbcb524032903a414b8a37f",
+   "sha256_output": "ce44b1c594ffbc98beaae45ed9910a877adbecebcdae3b7239618102fef22abf"
+  },
+  {
+   "id": "f7_all_channels",
+   "input": "inputs/f7_multitrack.mid",
+   "output": "outputs/f7_all_channels.mid",
+   "params": {
+    "genre": "rock",
+    "beat_type": "beat",
+    "intensity": 0.35,
+    "seed": 42,
+    "timing_only": false,
+    "velocity_only": false,
+    "push": false,
+    "phi": 0.4,
+    "all_channels": true,
+    "push_amount": null,
+    "intensity_by_group": null
+   },
+   "sha256_input": "0708c91d43919aee2e41aec3353e2b29c3263abd9bbcb524032903a414b8a37f",
+   "sha256_output": "adc216c209791bd5f49c2bf3047c29b4993fb05c5b410af8886225d46bcabf44"
+  },
+  {
+   "id": "f1_cli",
+   "input": "inputs/f1_rock_4bar.mid",
+   "output": "outputs/f1_cli.mid",
+   "cli_args": [
+    "--seed",
+    "42"
+   ],
+   "sha256_input": "18d1634078d4a19ca51c32c81169dcf037c0df2ebe6b2d37c01e464c4501ce78",
+   "sha256_output": "3269bfd3f3fd9d21a434a061a3e568902c5dda011566b72a3c2a38ff48b7cb3e"
+  }
+ ]
+}
