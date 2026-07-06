@@ -30,7 +30,7 @@ pairs are in [`demo/`](demo/) — drag `rock_ghosts_input.mid` and
 ## Quickstart
 
 ```bash
-pip install wobblemidi
+pip install wobblemidi   # or: pip install git+https://github.com/JakebGutierrez/wobblemidi
 wobblemidi drums.mid drums_humanised.mid
 ```
 
@@ -174,7 +174,8 @@ No dates, no promises:
   instead of flatten-then-regenerate.
 - More genres, when they can be done honestly (swing needs a different grid).
 
-## Data attribution
+## License
 
-Profile data is derived from the Groove MIDI Dataset, © Google LLC, licensed
-under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+[MIT](LICENSE). Profile data is derived from the Groove MIDI Dataset,
+© Google LLC, licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
