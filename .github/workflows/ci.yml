@@ -12,7 +12,9 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        python-version: ["3.10", "3.13"]
+        # The two combos the determinism contract records as byte-verified:
+        # vectors generated on CPython 3.14/macOS, re-verified on 3.11/ubuntu.
+        python-version: ["3.11", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4

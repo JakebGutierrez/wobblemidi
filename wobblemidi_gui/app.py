@@ -118,7 +118,26 @@ class Api:
         return session.export_to(dest_path)
 
 
+def _selfcheck() -> int:
+    """Packaging smoke test (scripts/build_app.sh): verify the bundled profile
+    loads through the normal adapter path and the web assets are present,
+    without opening a window."""
+    try:
+        session = adapter.Session()
+        session.cleanup()
+    except Exception as exc:
+        print(f"selfcheck FAIL: profile load: {exc}", file=sys.stderr)
+        return 1
+    if not (WEB_DIR / "index.html").is_file():
+        print(f"selfcheck FAIL: web assets missing at {WEB_DIR}", file=sys.stderr)
+        return 1
+    print("selfcheck OK: bundled profile and web assets load")
+    return 0
+
+
 def main() -> None:
+    if "--selfcheck" in sys.argv[1:]:
+        sys.exit(_selfcheck())
     autoload = sys.argv[1] if len(sys.argv) > 1 and Path(sys.argv[1]).is_file() else None
     api = Api(autoload_path=autoload)
     window = webview.create_window(
