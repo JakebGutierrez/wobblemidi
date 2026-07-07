@@ -19,6 +19,10 @@ definition (Tier 2 harness-based is THE gate and sufficient alone; Tier 1 byte-m
 optional): `wobblemidi_porting_contract.md`. Companions: `wobblemidi_determinism.md`
 (seed semantics / three RNG streams / rounding — frozen) and
 `wobblemidi_streamability.md` (offline-clip plugin model confirmed by inventory).
+Tier 2(b) runner (built + calibrated 2026-07-07): `scripts/compare_port.py verify` —
+locked bands in `calibration/tier2_thresholds.json` (margin 1.62, K=32; regenerate
+only via `scripts/calibrate_tier2.py` + sign-off), evidence in
+`calibration/tier2_calibration.md`, pytest-locked in `tests/test_compare_port.py`.
 
 **Golden vectors** (`tests/golden/`, 26 vectors, run in every pytest/CI pass via
 `tests/test_golden_vectors.py`; manual: `python scripts/verify_golden.py`) byte-lock

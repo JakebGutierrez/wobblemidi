@@ -1,6 +1,8 @@
 # wobblemidi — porting contract & handoff
 
-_Frozen 2026-07-06 (Fable window, Session 3). Audience: future sessions (human or model)
+_Frozen 2026-07-06 (Fable window, Session 3); amended 2026-07-07 (bonus session): the
+Tier 2(b) runner is now built and calibrated — section 2(b) below is a concrete locked
+procedure, no longer a future deliverable. Audience: future sessions (human or model)
 that must inherit conclusions instead of re-deriving them, and whoever executes the
 JUCE port. Everything in "Settled decisions" is a fact, not a proposal — do not reopen
 these without the owner explicitly doing so._
@@ -39,17 +41,43 @@ envelope (below). The harness measures distance-to-human per instrument on progr
 inputs at `intensity=1.0` (full-scale engine-vs-human comparison, independent of the
 0.35 product default), two-sided against human — never "beat the input".
 
-(b) **Distributional equivalence against the reference engine** on the golden input
-fixtures (`tests/golden/inputs/`, F1–F9): run the port and the reference engine at the
-same pinned params (seeds free to differ), and compare with the harness's metric suite —
-per-instrument offset distributions (Wasserstein/KS/σ/mean), within-position velocity σ,
-adjacent-jump distribution, contour preservation, lag-1 autocorrelation (timing and
-kick velocity), same-slot cross-instrument gap σ. Port-vs-reference is scored the same
-two-sided way the harness scores engine-vs-human. The metric functions are importable
-from `scripts/validate.py` (`read_output_hits`, `signed_offset_ms`, `evaluate_level`,
-`role_labels`, …) exactly as `tests/test_validate.py` already imports them; the thin
-port-vs-reference runner around them is the port project's first deliverable
-(deliberately not built here — no JUCE-adjacent tooling in this window).
+(b) **Distributional equivalence against the reference engine** — built, calibrated
+and locked 2026-07-07. The concrete procedure:
+
+- **Runner:** `python scripts/compare_port.py verify <candidate_dir>`. Cells = the
+  golden vectors (deduplicated: `f1_cli`, `f1_seed7` skipped) + the runner-owned
+  full-kit coverage fixture `tests/tier2/t2_full_kit.mid` (all 22 TD-11 notes — the
+  golden inputs only cover 36/38/42/46/49). The port supplies **exactly 32
+  independent-seed outputs per distributional cell** (layout `<dir>/<cell_id>/*.mid`,
+  ≥1 file per identity cell), seeds free to differ; the runner regenerates its own
+  pinned-seed reference pools, self-checks the local engine against the golden
+  manifest first, and exits 0/1. `python scripts/compare_port.py dump-reference <dir>`
+  writes example pools + the expected layout for port developers;
+  `--cells a,b` supports partial verification while porting module by module.
+- **Gates:** `calibration/tier2_thresholds.json` — 799 comparisons (harness-suite
+  metrics per instrument and per cell, plus per-note gates on the full-kit cell and
+  0.5 ms absolute gates on deterministic behaviours: rigid-cluster gaps, note_off
+  placement, chord tightness) + 13 aggregate family z-gates + ungated structural
+  contracts (alignment, melodic passthrough, meta preservation, mode-flag
+  invariants, identity cells). Metric functions come from `scripts/validate.py`, the
+  same scoring core the harness uses.
+- **Calibration (empirical, not fiat):** thresholds = null q99.5 × margin 1.62,
+  from 400 reference-vs-itself replicates; margin = the observed null max-ratio,
+  validated by **20/20 held-out full-verdict nulls**. A 13-mutant battery
+  (timing/velocity scale, phi and PHI_VEL, tiering, KDE bandwidth, coupling ×2,
+  de-bias, mapping ×2) detects 12 at 1.15–12.7× the bands. Evidence, stability
+  analysis and reproduction: `calibration/tier2_calibration.md` (committed,
+  self-sufficient in-tree). Bands are valid **only at K=32 pools**; any change goes
+  through `scripts/calibrate_tier2.py` + a fresh sign-off.
+- **Recorded limitation:** a PHI_VEL ±0.1 transcription error sits below the K=32
+  noise floor (the not-ported failure mode IS detected at 2.1×, and the Tier 2(a)
+  envelope pins kick velocity lag-1 vs human). Escalation: rerun both pools at
+  higher K (e.g. 128) on `t2_full_kit`/`f3_default` — estimator noise shrinks ~√K
+  while a real coefficient error does not; informational, since the locked bands
+  hold only at K=32.
+- **False-failure semantics:** a correct port failing marginally (ratio ≈ 1.0) may
+  regenerate its pools with fresh seeds — seeds are free by contract; every
+  calibrated defect shows ≥1.15× and most 2–13×.
 
 ### Tier 1 (optional, gold standard)
 
@@ -58,6 +86,12 @@ output. Only achievable by reimplementing the exact RNG/KDE machinery — the al
 inventory in `wobblemidi_determinism.md` (numpy legacy `RandomState`, scipy
 `gaussian_kde.resample`, the seed derivations, half-to-even rounding). Worth doing if
 the port embeds a MT19937 + the KDE resample math; not required for correctness.
+
+**RNG recommendation (2026-07-07):** the C++ core should use its **own clean RNG**
+(e.g. `std::mt19937_64` or a PCG, with straightforward normal/uniform draws) rather
+than attempting MT19937/scipy mimicry — Tier 2 is the gate and it is seed-free by
+design; Tier 1 byte-match remains the optional gold standard for anyone who later
+chooses to chase it.
 
 ## The verification artifacts (what exists, how to run it)
 
@@ -68,7 +102,9 @@ the port embeds a MT19937 + the KDE resample math; not required for correctness.
 | `wobblemidi_determinism.md` | Seed semantics, three RNG streams, draw order, rounding rules, guarantees + hazards | — |
 | `wobblemidi_streamability.md` | Plugin-readiness map (offline-clip model confirmed) | — |
 | `scripts/validate.py` | Part C harness: distance-to-human on held-out GMD; gates profile rebuilds and grades ports (Tier 2a) | `python scripts/validate.py <path/to/groove-v1.0.0>` |
-| Full test suite (308) | Engine invariants + golden locks | `.venv/bin/pytest` |
+| `scripts/compare_port.py` + `tests/tier2/t2_full_kit.mid` | Tier 2(b) runner: port-vs-reference distributional equivalence on the golden inputs + full-kit fixture | `python scripts/compare_port.py verify <candidate_dir>` (self-test: `… self-null`) |
+| `calibration/tier2_thresholds.json` + `calibration/tier2_calibration.md` | Locked Tier 2(b) bands (margin 1.62, K=32) + the null/mutation evidence behind them | regenerate via `scripts/calibrate_tier2.py` + re-sign-off only |
+| Full test suite (325) | Engine invariants + golden locks + Tier 2 runner locks (self-null PASS / gross mutant FAIL) | `.venv/bin/pytest` |
 
 **Harness setup:** download the Groove MIDI Dataset v1.0.0 (Magenta, Roland TD-11) and
 pass its directory (containing `info.csv`) to `validate.py`. The **train/test split
@@ -146,6 +182,9 @@ is required before the port.
   settled decision 7.
 - Any profile rebuild: gate through `scripts/validate.py` (train-built gate profile,
   held-out test), then **listen** (`scripts/make_eartest.py`), then regenerate vectors.
-- The port: implement from this inventory, grade with Tier 2, optionally chase Tier 1.
-  JUCE work was explicitly out of scope for this window; nothing here presupposes any
-  scaffolding choice beyond decisions 2–3.
+- The port: implement from this inventory, grade with Tier 2 — the 2(b) runner is
+  already built, calibrated and pytest-locked (port a module, produce 32-seed pools,
+  run `compare_port.py verify`, red or green) — optionally chase Tier 1 with its own
+  clean RNG in the meantime (see the RNG recommendation above). JUCE work was
+  explicitly out of scope for this window; nothing here presupposes any scaffolding
+  choice beyond decisions 2–3.
