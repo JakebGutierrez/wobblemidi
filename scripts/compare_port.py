@@ -104,6 +104,15 @@ MIN_POOLED_HITS = 100   # per-group rows need n_hits_per_run * K_RUNS >= this
 # during run GENERATION can never change how the scorer identifies input clusters.
 WINDOW_MS = float(humanise_mod.COUPLE_WINDOW_MS)
 
+# zjump mass is lattice-valued (multiples of 1 / n_jumps); below this many hits
+# per run the per-group null quantiles are too coarse to gate on (calibration
+# round 1 finding: t2 tom_low at 16 hits/run drove held-out false failures).
+ZJUMP_MIN_HITS = 32
+# Per-note distribution gates run on the full-kit cell only: mapping errors are
+# per-note phenomena and group-level pooling dilutes low-share variants
+# (calibration round 1: note 22 → hihat_open was detected at ratio 1.05 only).
+PER_NOTE_MIN_HITS = 4
+
 # Golden vectors that are not Tier 2 cells.
 SKIPPED_VECTORS = {
     "f1_cli": "CLI plumbing lock — no port analogue; params identical to f1_default",
@@ -325,6 +334,8 @@ class CellData:
     melodic_notes: list     # per-track normalised non-drum-channel note events
     metas: list             # (track, abs, type, key params) for set_tempo/time_signature
     gated_groups: list[str]
+    group_counts: dict      # hits per run per group
+    note_masks: dict        # full-kit cell only: "n<note>" -> hit mask (per-note gates)
     timing_scored: bool
     velocity_scored: bool
 
@@ -416,6 +427,13 @@ def prepare_cell(cell: Cell) -> CellData:
     gated = [g for g in GROUP_ORDER
              if counts.get(g, 0) * K_RUNS >= MIN_POOLED_HITS]
 
+    note_masks: dict[str, np.ndarray] = {}
+    if cell.id == FULL_KIT_CELL_ID:
+        for note in sorted(np.unique(notes)):
+            mask = notes == note
+            if int(mask.sum()) >= PER_NOTE_MIN_HITS:
+                note_masks[f"n{int(note)}"] = mask
+
     return CellData(
         cell=cell, ppq=ppq, tempo_map=tempo_map, n_tracks=len(mid.tracks),
         track=tr, channel=ch, notes=notes, in_abs=in_abs, in_vel=in_vel,
@@ -426,6 +444,8 @@ def prepare_cell(cell: Cell) -> CellData:
         melodic_notes=[] if all_channels else _extract_melodic(mid),
         metas=_extract_metas(mid),
         gated_groups=gated,
+        group_counts=counts,
+        note_masks=note_masks,
         timing_scored=not bool(cell.params.get("velocity_only", False)),
         velocity_scored=not bool(cell.params.get("timing_only", False)),
     )
@@ -652,8 +672,10 @@ def score_pools(cd: CellData, runs_a: list[RunResult],
                               "veld")
             del d["veld_ks"]
             out.update({f"{g}|{k}": v for k, v in d.items()})
-            for stat, name in [("v_lag1", "v_lag1_d"), ("wrole_sigma", "wrole_sigma_d"),
-                               ("zjump", "zjump_d")]:
+            stats = [("v_lag1", "v_lag1_d"), ("wrole_sigma", "wrole_sigma_d")]
+            if g == "ALL" or cd.group_counts.get(g, 0) >= ZJUMP_MIN_HITS:
+                stats.append(("zjump", "zjump_d"))
+            for stat, name in stats:
                 a = _mean_runstat(runs_a, (g, stat))
                 b = _mean_runstat(runs_b, (g, stat))
                 out[f"{g}|{name}"] = float(abs(a - b))
@@ -670,6 +692,17 @@ def score_pools(cd: CellData, runs_a: list[RunResult],
         a, b = _pool(runs_a, "cdev"), _pool(runs_b, "cdev")
         out["ALL|cdev_w1"] = (float(wasserstein_distance(a, b))
                               if len(a) and len(b) else float("nan"))
+    # Per-note pooled distributions (full-kit cell only): mapping errors are
+    # per-note, and group pooling dilutes low-share variants like 22/26/44.
+    for note_key, mask in cd.note_masks.items():
+        if cd.timing_scored:
+            a, b = _pool(runs_a, "off", mask), _pool(runs_b, "off", mask)
+            out[f"{note_key}|off_w1"] = (float(wasserstein_distance(a, b))
+                                         if len(a) and len(b) else float("nan"))
+        if cd.velocity_scored:
+            a, b = _pool(runs_a, "veld", mask), _pool(runs_b, "veld", mask)
+            out[f"{note_key}|veld_w1"] = (float(wasserstein_distance(a, b))
+                                          if len(a) and len(b) else float("nan"))
     return out
 
 

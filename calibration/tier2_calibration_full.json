@@ -1,0 +1,910 @@
+{
+ "meta": {
+  "description": "Tier 2 port-vs-reference equivalence bands. Calibrated empirically (scripts/calibrate_tier2.py): null = reference engine vs itself at disjoint seeds against the runner's pinned reference pool; threshold = null q0.995 x margin 1.5619. Valid ONLY at K=32 runs per pool. See calibration/tier2_calibration.md.",
+  "generated_at": "2026-07-07",
+  "generated_at_rev": "5fdfb55",
+  "platform": "macOS-26.5.1-arm64-arm-64bit-Mach-O",
+  "python": "3.14.4",
+  "numpy": "2.5.1",
+  "scipy": "1.18.0",
+  "profile_sha256": "6ab0cf5471555bbb819805346eea790d88e14a95ecd73caf7f430cf1ad723bc7",
+  "full_kit_fixture_sha256": "d6a947d9415c7ed1e0e1c08fbc10b68297d9a47d69a2e5f42b977c6d0cce73d8",
+  "K_runs": 32,
+  "reference_seed_base": 777000,
+  "master_runs": 256,
+  "n_replicates": 400,
+  "quantile": 0.995,
+  "margin": 1.5619,
+  "margin_selection": {
+   "mode": "auto",
+   "M_mean": 1.1024527587099053,
+   "M_q": 1.487553303096451,
+   "M_max": 1.618752764263601,
+   "margin": 1.5619
+  },
+  "quick_mode": 0,
+  "cells": [
+   "f1_default",
+   "f2_default",
+   "f3_default",
+   "f4_default",
+   "f5_default",
+   "f6_default",
+   "f7_default",
+   "f8_default",
+   "f9_single_default",
+   "f1_intensity10",
+   "f1_phi00",
+   "f1_phi09",
+   "f1_push",
+   "f1_lean_mirror",
+   "f1_lean_half",
+   "f4_phi00",
+   "f4_hats_pinned",
+   "f2_timing_only",
+   "f2_velocity_only",
+   "f2_fill",
+   "f7_lanes",
+   "f7_all_channels",
+   "t2_full_kit"
+  ]
+ },
+ "null_summary_by_family": {
+  "cdev_w1": {
+   "n_keys": 3,
+   "batch_q99_spread_median": 0.1907599733822298,
+   "batch_q99_spread_max": 0.19526960439250957,
+   "alt_A_relq_median": 0.2032414964794123,
+   "alt_A_relq_max": 0.36576094607912174
+  },
+  "off_ks": {
+   "n_keys": 21,
+   "batch_q99_spread_median": 0.12374355502317635,
+   "batch_q99_spread_max": 0.37476577139287964,
+   "alt_A_relq_median": 0.10390083849799567,
+   "alt_A_relq_max": 0.35451130097557987
+  },
+  "off_mean_d": {
+   "n_keys": 86,
+   "batch_q99_spread_median": 0.16246747149743387,
+   "batch_q99_spread_max": 0.40905187654695163,
+   "alt_A_relq_median": 0.15052823017338685,
+   "alt_A_relq_max": 0.7831500774135991
+  },
+  "off_sigma_d": {
+   "n_keys": 86,
+   "batch_q99_spread_median": 0.16538608961030082,
+   "batch_q99_spread_max": 0.35661163252590655,
+   "alt_A_relq_median": 0.15426096314807194,
+   "alt_A_relq_max": 1.0557636555907495
+  },
+  "off_w1": {
+   "n_keys": 108,
+   "batch_q99_spread_median": 0.14442613340297467,
+   "batch_q99_spread_max": 0.361640508221226,
+   "alt_A_relq_median": 0.1372558542582245,
+   "alt_A_relq_max": 0.819273703546701
+  },
+  "offd_w1": {
+   "n_keys": 22,
+   "batch_q99_spread_median": 0.13567706962791273,
+   "batch_q99_spread_max": 0.13567706962791273,
+   "alt_A_relq_median": 0.18941108362717937,
+   "alt_A_relq_max": 0.24151360454712986
+  },
+  "t_lag1_d": {
+   "n_keys": 16,
+   "batch_q99_spread_median": 0.21252558858250925,
+   "batch_q99_spread_max": 0.32903386920998706,
+   "alt_A_relq_median": 0.19155027893938656,
+   "alt_A_relq_max": 0.42276223890469233
+  },
+  "v_lag1_d": {
+   "n_keys": 39,
+   "batch_q99_spread_median": 0.20939311807419492,
+   "batch_q99_spread_max": 0.3266598164492242,
+   "alt_A_relq_median": 0.1465465991440764,
+   "alt_A_relq_max": 0.9763922163863215
+  },
+  "veld_mean_d": {
+   "n_keys": 89,
+   "batch_q99_spread_median": 0.1689544281818969,
+   "batch_q99_spread_max": 0.32197999190423876,
+   "alt_A_relq_median": 0.19220587517688975,
+   "alt_A_relq_max": 0.8834595359098425
+  },
+  "veld_sigma_d": {
+   "n_keys": 89,
+   "batch_q99_spread_median": 0.16941056183166228,
+   "batch_q99_spread_max": 0.3340488838568547,
+   "alt_A_relq_median": 0.18094905681792342,
+   "alt_A_relq_max": 0.7627231939780471
+  },
+  "veld_w1": {
+   "n_keys": 111,
+   "batch_q99_spread_median": 0.13156506040827712,
+   "batch_q99_spread_max": 0.3322998611753815,
+   "alt_A_relq_median": 0.14980822642507574,
+   "alt_A_relq_max": 0.8264461620046989
+  },
+  "wrole_sigma_d": {
+   "n_keys": 80,
+   "batch_q99_spread_median": 0.17700523361262097,
+   "batch_q99_spread_max": 0.3202499821143053,
+   "alt_A_relq_median": 0.21493378149264675,
+   "alt_A_relq_max": 0.9553507005423694
+  },
+  "xgap_sigma_d": {
+   "n_keys": 5,
+   "batch_q99_spread_median": null,
+   "batch_q99_spread_max": null,
+   "alt_A_relq_median": null,
+   "alt_A_relq_max": null
+  },
+  "zjump_d": {
+   "n_keys": 44,
+   "batch_q99_spread_median": 0.14396288002652707,
+   "batch_q99_spread_max": 0.3563381332537479,
+   "alt_A_relq_median": 0.2341176470588226,
+   "alt_A_relq_max": 1.092390298092947
+  }
+ },
+ "mutants": [
+  {
+   "name": "off_scale_up",
+   "description": "timing offset samples \u00d71.10",
+   "simulates": "sample-path gain error ~ +10%",
+   "detected": 1,
+   "n_tripped": 15,
+   "n_structural": 0,
+   "worst_ratio": 1.6602230263326048,
+   "worst_key": "t2_full_kit|ALL|off_sigma_d",
+   "top_tripped": [
+    [
+     "t2_full_kit|ALL|off_sigma_d",
+     1.66
+    ],
+    [
+     "f2_default|ALL|off_sigma_d",
+     1.64
+    ],
+    [
+     "f2_timing_only|ALL|off_sigma_d",
+     1.64
+    ],
+    [
+     "f2_default|hihat_closed|off_sigma_d",
+     1.59
+    ],
+    [
+     "f2_timing_only|hihat_closed|off_sigma_d",
+     1.59
+    ],
+    [
+     "f2_fill|hihat_closed|off_sigma_d",
+     1.5
+    ],
+    [
+     "f2_fill|ALL|off_sigma_d",
+     1.34
+    ],
+    [
+     "t2_full_kit|snare|off_sigma_d",
+     1.34
+    ]
+   ],
+   "tripped_cells": [
+    "f1_phi00",
+    "f2_default",
+    "f2_fill",
+    "f2_timing_only",
+    "f3_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "off_sigma_d"
+   ]
+  },
+  {
+   "name": "off_scale_dn",
+   "description": "timing offset samples \u00d70.90",
+   "simulates": "sample-path gain error ~ -10%",
+   "detected": 1,
+   "n_tripped": 33,
+   "n_structural": 0,
+   "worst_ratio": 2.088763714568833,
+   "worst_key": "f2_default|ALL|off_sigma_d",
+   "top_tripped": [
+    [
+     "f2_default|ALL|off_sigma_d",
+     2.09
+    ],
+    [
+     "f2_timing_only|ALL|off_sigma_d",
+     2.09
+    ],
+    [
+     "t2_full_kit|ALL|off_sigma_d",
+     1.93
+    ],
+    [
+     "f2_default|hihat_closed|off_sigma_d",
+     1.93
+    ],
+    [
+     "f2_timing_only|hihat_closed|off_sigma_d",
+     1.93
+    ],
+    [
+     "t2_full_kit|ride|off_sigma_d",
+     1.51
+    ],
+    [
+     "f1_phi00|ALL|off_sigma_d",
+     1.46
+    ],
+    [
+     "f3_default|hihat_closed|off_sigma_d",
+     1.36
+    ]
+   ],
+   "tripped_cells": [
+    "f1_default",
+    "f1_intensity10",
+    "f1_lean_half",
+    "f1_lean_mirror",
+    "f1_phi00",
+    "f1_push",
+    "f2_default",
+    "f2_timing_only",
+    "f3_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "off_w1",
+    "off_sigma_d"
+   ]
+  },
+  {
+   "name": "vel_scale_up",
+   "description": "velocity delta samples \u00d71.15",
+   "simulates": "velocity gain error ~ +15%",
+   "detected": 1,
+   "n_tripped": 89,
+   "n_structural": 0,
+   "worst_ratio": 3.4224916013235918,
+   "worst_key": "t2_full_kit|ALL|veld_sigma_d",
+   "top_tripped": [
+    [
+     "t2_full_kit|ALL|veld_sigma_d",
+     3.42
+    ],
+    [
+     "f2_fill|ALL|veld_sigma_d",
+     2.92
+    ],
+    [
+     "t2_full_kit|ALL|wrole_sigma_d",
+     2.69
+    ],
+    [
+     "f2_fill|hihat_closed|veld_sigma_d",
+     2.68
+    ],
+    [
+     "f2_fill|ALL|wrole_sigma_d",
+     2.57
+    ],
+    [
+     "f2_fill|hihat_closed|wrole_sigma_d",
+     2.44
+    ],
+    [
+     "f3_default|ALL|wrole_sigma_d",
+     2.36
+    ],
+    [
+     "f3_default|ALL|veld_sigma_d",
+     2.12
+    ]
+   ],
+   "tripped_cells": [
+    "f1_default",
+    "f1_intensity10",
+    "f1_lean_half",
+    "f1_lean_mirror",
+    "f1_phi00",
+    "f1_phi09",
+    "f1_push",
+    "f2_default",
+    "f2_fill",
+    "f2_velocity_only",
+    "f3_default",
+    "f4_default",
+    "f4_phi00",
+    "f5_default",
+    "f6_default",
+    "f7_all_channels",
+    "f7_default",
+    "f8_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "veld_w1",
+    "veld_sigma_d",
+    "wrole_sigma_d"
+   ]
+  },
+  {
+   "name": "phi_nudge",
+   "description": "phi +0.1 (cells with phi>0)",
+   "simulates": "wrong AR(1) drift coefficient in the timing clock",
+   "detected": 1,
+   "n_tripped": 4,
+   "n_structural": 0,
+   "worst_ratio": 1.6171289042338122,
+   "worst_key": "t2_full_kit|ALL|t_lag1_d",
+   "top_tripped": [
+    [
+     "t2_full_kit|ALL|t_lag1_d",
+     1.62
+    ],
+    [
+     "f2_default|ALL|t_lag1_d",
+     1.28
+    ],
+    [
+     "f2_timing_only|ALL|t_lag1_d",
+     1.28
+    ],
+    [
+     "f2_fill|ALL|t_lag1_d",
+     1.05
+    ]
+   ],
+   "tripped_cells": [
+    "f2_default",
+    "f2_fill",
+    "f2_timing_only",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "t_lag1_d"
+   ]
+  },
+  {
+   "name": "phivel_nudge",
+   "description": "PHI_VEL 0.37 \u2192 0.47",
+   "simulates": "kick velocity drift coefficient transcription error",
+   "detected": 0,
+   "n_tripped": 0,
+   "n_structural": 0,
+   "worst_ratio": 0.6356857617124624,
+   "worst_key": null,
+   "top_tripped": [],
+   "tripped_cells": [],
+   "agg_tripped": []
+  },
+  {
+   "name": "phivel_off",
+   "description": "PHI_VEL 0.37 \u2192 0.0 (kick velocity drift disabled)",
+   "simulates": "kick velocity AR clock not ported at all",
+   "detected": 1,
+   "n_tripped": 2,
+   "n_structural": 0,
+   "worst_ratio": 2.1244528877340683,
+   "worst_key": "t2_full_kit|kick|v_lag1_d",
+   "top_tripped": [
+    [
+     "t2_full_kit|kick|v_lag1_d",
+     2.12
+    ],
+    [
+     "f3_default|kick|v_lag1_d",
+     1.75
+    ]
+   ],
+   "tripped_cells": [
+    "f3_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": []
+  },
+  {
+   "name": "tier_flatten",
+   "description": "relative tiering disabled (absolute fallback)",
+   "simulates": "per-file relative tier thresholds (B4) not ported",
+   "detected": 1,
+   "n_tripped": 50,
+   "n_structural": 0,
+   "worst_ratio": 5.285856973647679,
+   "worst_key": "t2_full_kit|n38|veld_w1",
+   "top_tripped": [
+    [
+     "t2_full_kit|n38|veld_w1",
+     5.29
+    ],
+    [
+     "t2_full_kit|snare|veld_w1",
+     4.11
+    ],
+    [
+     "t2_full_kit|n40|veld_w1",
+     3.15
+    ],
+    [
+     "t2_full_kit|snare|wrole_sigma_d",
+     2.95
+    ],
+    [
+     "f1_intensity10|snare|wrole_sigma_d",
+     2.78
+    ],
+    [
+     "f1_default|snare|wrole_sigma_d",
+     2.64
+    ],
+    [
+     "f1_phi00|snare|wrole_sigma_d",
+     2.64
+    ],
+    [
+     "f1_phi09|snare|wrole_sigma_d",
+     2.64
+    ]
+   ],
+   "tripped_cells": [
+    "f1_default",
+    "f1_intensity10",
+    "f1_lean_half",
+    "f1_lean_mirror",
+    "f1_phi00",
+    "f1_phi09",
+    "f1_push",
+    "f2_default",
+    "f2_fill",
+    "f2_velocity_only",
+    "f7_all_channels",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "veld_w1",
+    "veld_sigma_d",
+    "wrole_sigma_d",
+    "zjump_d"
+   ]
+  },
+  {
+   "name": "kde_bw_x1.5",
+   "description": "KDE bandwidth \u00d71.5 on every bucket",
+   "simulates": "wrong bandwidth factor in the KDE reimplementation",
+   "detected": 1,
+   "n_tripped": 9,
+   "n_structural": 0,
+   "worst_ratio": 1.9186858496031796,
+   "worst_key": "f2_fill|ALL|veld_sigma_d",
+   "top_tripped": [
+    [
+     "f2_fill|ALL|veld_sigma_d",
+     1.92
+    ],
+    [
+     "f2_fill|ALL|wrole_sigma_d",
+     1.81
+    ],
+    [
+     "f2_fill|hihat_closed|veld_sigma_d",
+     1.7
+    ],
+    [
+     "f2_fill|hihat_closed|wrole_sigma_d",
+     1.6
+    ],
+    [
+     "f2_fill|ALL|veld_w1",
+     1.53
+    ],
+    [
+     "f2_fill|snare|wrole_sigma_d",
+     1.19
+    ],
+    [
+     "f2_fill|snare|veld_sigma_d",
+     1.18
+    ],
+    [
+     "t2_full_kit|ALL|veld_sigma_d",
+     1.12
+    ]
+   ],
+   "tripped_cells": [
+    "f2_fill",
+    "t2_full_kit"
+   ],
+   "agg_tripped": []
+  },
+  {
+   "name": "couple_off",
+   "description": "COUPLE_WINDOW_MS \u2192 -1 (windowed clusters disabled)",
+   "simulates": "12 ms rigid-cluster coupling not ported",
+   "detected": 1,
+   "n_tripped": 2,
+   "n_structural": 0,
+   "worst_ratio": 13.129340277777676,
+   "worst_key": "f4_hats_pinned|ALL|cdev_w1",
+   "top_tripped": [
+    [
+     "f4_hats_pinned|ALL|cdev_w1",
+     13.13
+    ],
+    [
+     "f4_default|ALL|cdev_w1",
+     12.17
+    ]
+   ],
+   "tripped_cells": [
+    "f4_default",
+    "f4_hats_pinned"
+   ],
+   "agg_tripped": [
+    "cdev_w1"
+   ]
+  },
+  {
+   "name": "couple_loose",
+   "description": "COUPLED_RESIDUAL_MS 1 \u2192 25",
+   "simulates": "same-tick chord coupling residual mis-ported (loose chords)",
+   "detected": 1,
+   "n_tripped": 5,
+   "n_structural": 0,
+   "worst_ratio": 1.9981483131956717,
+   "worst_key": "f3_default|ALL|xgap_sigma_d",
+   "top_tripped": [
+    [
+     "f3_default|ALL|xgap_sigma_d",
+     2.0
+    ],
+    [
+     "f2_default|ALL|xgap_sigma_d",
+     1.78
+    ],
+    [
+     "f2_timing_only|ALL|xgap_sigma_d",
+     1.78
+    ],
+    [
+     "t2_full_kit|ALL|xgap_sigma_d",
+     1.72
+    ],
+    [
+     "f2_fill|ALL|xgap_sigma_d",
+     1.68
+    ]
+   ],
+   "tripped_cells": [
+    "f2_default",
+    "f2_fill",
+    "f2_timing_only",
+    "f3_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": []
+  },
+  {
+   "name": "debias_off",
+   "description": "bucket_offset_means dropped (de-bias skipped)",
+   "simulates": "push/lean de-bias arithmetic not ported",
+   "detected": 1,
+   "n_tripped": 117,
+   "n_structural": 0,
+   "worst_ratio": 4.121571255879161,
+   "worst_key": "f1_lean_mirror|kick|off_mean_d",
+   "top_tripped": [
+    [
+     "f1_lean_mirror|kick|off_mean_d",
+     4.12
+    ],
+    [
+     "f1_lean_mirror|kick|off_w1",
+     4.04
+    ],
+    [
+     "f2_fill|hihat_closed|off_mean_d",
+     3.04
+    ],
+    [
+     "f2_fill|hihat_closed|off_w1",
+     3.04
+    ],
+    [
+     "f2_default|kick|off_mean_d",
+     2.79
+    ],
+    [
+     "f2_timing_only|kick|off_mean_d",
+     2.79
+    ],
+    [
+     "f2_default|kick|off_w1",
+     2.68
+    ],
+    [
+     "f2_timing_only|kick|off_w1",
+     2.68
+    ]
+   ],
+   "tripped_cells": [
+    "f1_default",
+    "f1_intensity10",
+    "f1_lean_half",
+    "f1_lean_mirror",
+    "f1_phi00",
+    "f2_default",
+    "f2_fill",
+    "f2_timing_only",
+    "f3_default",
+    "f4_default",
+    "f4_phi00",
+    "f5_default",
+    "f6_default",
+    "f7_all_channels",
+    "f7_default",
+    "f7_lanes",
+    "f8_default",
+    "t2_full_kit"
+   ],
+   "agg_tripped": [
+    "off_w1",
+    "off_ks",
+    "off_mean_d"
+   ]
+  },
+  {
+   "name": "map_42_ride",
+   "description": "TD-11 note 42 (closed hat) \u2192 ride bucket",
+   "simulates": "instrument-mapping error on a core note",
+   "detected": 1,
+   "n_tripped": 89,
+   "n_structural": 0,
+   "worst_ratio": 6.061805348113959,
+   "worst_key": "f7_lanes|hihat_closed|wrole_sigma_d",
+   "top_tripped": [
+    [
+     "f7_lanes|hihat_closed|wrole_sigma_d",
+     6.06
+    ],
+    [
+     "f7_lanes|hihat_closed|off_sigma_d",
+     5.87
+    ],
+    [
+     "f7_lanes|ALL|wrole_sigma_d",
+     5.77
+    ],
+    [
+     "f7_lanes|hihat_closed|veld_sigma_d",
+     5.76
+    ],
+    [
+     "f7_lanes|ALL|off_sigma_d",
+     5.62
+    ],
+    [
+     "f7_lanes|ALL|veld_sigma_d",
+     5.6
+    ],
+    [
+     "f4_hats_pinned|ALL|veld_w1",
+     5.39
+    ],
+    [
+     "f7_lanes|hihat_closed|veld_w1",
+     3.44
+    ]
+   ],
+   "tripped_cells": [
+    "f1_default",
+    "f1_intensity10",
+    "f1_lean_half",
+    "f1_lean_mirror",
+    "f1_phi00",
+    "f1_phi09",
+    "f1_push",
+    "f2_default",
+    "f2_fill",
+    "f2_timing_only",
+    "f2_velocity_only",
+    "f3_default",
+    "f4_hats_pinned",
+    "f5_default",
+    "f6_default",
+    "f7_all_channels",
+    "f7_default",
+    "f7_lanes",
+    "f8_default"
+   ],
+   "agg_tripped": [
+    "off_sigma_d",
+    "veld_w1",
+    "veld_sigma_d",
+    "wrole_sigma_d"
+   ]
+  },
+  {
+   "name": "map_22_edge",
+   "description": "TD-11 note 22 (HH closed edge) \u2192 hihat_open bucket",
+   "simulates": "instrument-mapping error on an edge-variant note (only the full-kit fixture contains note 22)",
+   "detected": 1,
+   "n_tripped": 4,
+   "n_structural": 0,
+   "worst_ratio": 1.1915566811640836,
+   "worst_key": "t2_full_kit|n22|veld_w1",
+   "top_tripped": [
+    [
+     "t2_full_kit|n22|veld_w1",
+     1.19
+    ],
+    [
+     "t2_full_kit|ALL|veld_sigma_d",
+     1.15
+    ],
+    [
+     "t2_full_kit|hihat_closed|veld_sigma_d",
+     1.11
+    ],
+    [
+     "t2_full_kit|hihat_closed|wrole_sigma_d",
+     1.05
+    ]
+   ],
+   "tripped_cells": [
+    "t2_full_kit"
+   ],
+   "agg_tripped": []
+  }
+ ],
+ "held_out": [
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7389567102692426,
+   "worst_agg_ratio": 0.24908806813508938,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7743422696815098,
+   "worst_agg_ratio": 0.435978492915637,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7919311234353198,
+   "worst_agg_ratio": 0.2995919401811954,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7816137162641419,
+   "worst_agg_ratio": 0.6911641545191126,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7642946068380321,
+   "worst_agg_ratio": 0.46018177669208765,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7113842826756585,
+   "worst_agg_ratio": 0.07697527789178496,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.6413148674883199,
+   "worst_agg_ratio": 0.3873833438225564,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7632510067586212,
+   "worst_agg_ratio": 0.3268079527486735,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7049782714564568,
+   "worst_agg_ratio": 0.33204263735177586,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.8825870663599485,
+   "worst_agg_ratio": 0.17577081183882298,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7189074832305747,
+   "worst_agg_ratio": 0.5449017830445355,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.9792870240550862,
+   "worst_agg_ratio": 0.8753150562812834,
+   "failures": []
+  },
+  {
+   "passed": 0,
+   "n_failures": 1,
+   "worst_ratio": 1.0025540885436701,
+   "worst_agg_ratio": 0.5278010513092614,
+   "failures": [
+    "[metric] f4_hats_pinned|ALL|veld_mean_d: 0.423 > threshold 0.4219"
+   ]
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7086256940022723,
+   "worst_agg_ratio": 0.2587353775701394,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.766346702263239,
+   "worst_agg_ratio": 0.6778334180648291,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.763811969807828,
+   "worst_agg_ratio": 0.3004323191368028,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7403332126021307,
+   "worst_agg_ratio": 0.4139557179649252,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.7036395449937104,
+   "worst_agg_ratio": 0.3290262230311446,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.792695770506745,
+   "worst_agg_ratio": 0.415138803379658,
+   "failures": []
+  },
+  {
+   "passed": 1,
+   "n_failures": 0,
+   "worst_ratio": 0.6288919076913888,
+   "worst_agg_ratio": 0.24077920838058608,
+   "failures": []
+  }
+ ]
+}
